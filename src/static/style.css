@@ -1,0 +1,152 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  background: #0b0f14;
+  color: #e6edf3;
+}
+
+.header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #1f2a37;
+  background: #0b0f14;
+  position: sticky;
+  top: 0;
+}
+
+.header__title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.header__subtitle {
+  font-size: 12px;
+  color: #9aa4b2;
+  margin-top: 4px;
+}
+
+.main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.panel {
+  border: 1px solid #1f2a37;
+  border-radius: 10px;
+  background: #0f1623;
+  padding: 14px;
+}
+
+.panel__title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: #cbd5e1;
+}
+
+.queryControls {
+  display: grid;
+  gap: 10px;
+}
+
+#queryTextArea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #1f2a37;
+  background: #0b0f14;
+  color: #e6edf3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.queryControls__buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.button {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #334155;
+  background: #111a2a;
+  color: #e6edf3;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.button--primary {
+  border-color: #2563eb;
+  background: #1d4ed8;
+}
+
+.queryControls__meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #9aa4b2;
+}
+
+.label {
+  color: #cbd5e1;
+}
+
+.metricsGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.metric {
+  border: 1px solid #1f2a37;
+  border-radius: 10px;
+  padding: 10px;
+  background: #0b0f14;
+}
+
+.metric__label {
+  font-size: 11px;
+  color: #9aa4b2;
+  margin-bottom: 6px;
+}
+
+.metric__value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e6edf3;
+}
+
+.logs {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #0b0f14;
+  border: 1px solid #1f2a37;
+  border-radius: 10px;
+  padding: 10px;
+  min-height: 120px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.logLine {
+  padding: 2px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.logLine:last-child {
+  border-bottom: none;
+}
