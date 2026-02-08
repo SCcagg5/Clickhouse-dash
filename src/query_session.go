@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+	"strings"
+	"fmt"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	clickhouseDriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -16,12 +17,20 @@ import (
 type querySessionStatus string
 
 const (
-	querySessionStatusCreated  querySessionStatus = "created"
-	querySessionStatusRunning  querySessionStatus = "running"
-	querySessionStatusFinished querySessionStatus = "finished"
-	querySessionStatusErrored  querySessionStatus = "error"
-	querySessionStatusCanceled querySessionStatus = "canceled"
+	querySessionStatusCreated            querySessionStatus = "created"
+	querySessionStatusRunning            querySessionStatus = "running"
+	querySessionStatusFinished           querySessionStatus = "finished"
+	querySessionStatusErrored            querySessionStatus = "error"
+	querySessionStatusCanceled           querySessionStatus = "canceled"
+	querySessionStatusResultLimitReached querySessionStatus = "result_limit_reached"
 )
+
+const (
+	resultBatchRows   = 200
+	resultBatchPeriod = 50 * time.Millisecond
+)
+
+
 
 // querySession contains state and callbacks for a single query execution.
 //
@@ -52,8 +61,8 @@ type querySession struct {
 
 	nonCriticalEventChannel chan serverSentEventsMessage
 	criticalEventChannel    chan serverSentEventsMessage
+	resultEventChannel      chan serverSentEventsMessage
 
-	// Progress counters (server reports progress in deltas; these fields are accumulated totals).
 	readRowsTotal   uint64
 	readBytesTotal  uint64
 	totalRowsToRead uint64
@@ -61,23 +70,21 @@ type querySession struct {
 	wroteRowsTotal  uint64
 	wroteBytesTotal uint64
 
-	// Profile events totals.
 	userTimeMicrosecondsTotal   int64
 	systemTimeMicrosecondsTotal int64
 
-	// Optional: memory tracking (best effort).
 	currentMemoryBytes *int64
 	peakMemoryBytes    *int64
 
-	// Thread tracking (best effort).
 	threadLastSeenByIdentifier map[uint64]time.Time
 	threadPeakCount            int
 
-	// Server logs (for UI log panel).
-	logLinesRingBuffer           []string
-	logLinesRingBufferNextIndex  int
-	logLinesRingBufferCountValid int
+	resultPreviewRowLimit int
+	resultRowsReturned    int
+	resultTruncated       bool
 }
+
+
 
 // querySessionSnapshot is an immutable view of a session at a specific time.
 type querySessionSnapshot struct {
@@ -103,9 +110,8 @@ type querySessionSnapshot struct {
 
 	threadLastSeenByIdentifier map[uint64]time.Time
 	threadPeakCount            int
-
-	logLines []string
 }
+
 
 // newQuerySession creates a new query session.
 func newQuerySession(
@@ -114,6 +120,7 @@ func newQuerySession(
 	queryText string,
 	databaseName string,
 	settings clickhouse.Settings,
+	resultPreviewRowLimit int,
 ) *querySession {
 	return &querySession{
 		logger: logger,
@@ -127,15 +134,34 @@ func newQuerySession(
 		status:      querySessionStatusCreated,
 
 		nonCriticalEventChannel: make(chan serverSentEventsMessage, 256),
-		criticalEventChannel:    make(chan serverSentEventsMessage, 16),
+		criticalEventChannel:    make(chan serverSentEventsMessage, 64),
+		resultEventChannel:      make(chan serverSentEventsMessage, 2048),
 
 		threadLastSeenByIdentifier: make(map[uint64]time.Time),
 
-		logLinesRingBuffer: make([]string, 200),
+		resultPreviewRowLimit: resultPreviewRowLimit,
 	}
 }
 
-// start begins query execution exactly once.
+
+
+func (session *querySession) trySendResult(message serverSentEventsMessage) {
+	select {
+	case session.resultEventChannel <- message:
+		return
+	default:
+		// The client is too slow: do not accumulate unbounded memory.
+		session.requestCancellation()
+		session.trySendCritical(serverSentEventsMessage{
+			eventName: "error",
+			payload: map[string]any{
+				"query_id": session.queryIdentifier,
+				"message":  "client is too slow to consume result stream",
+			},
+		})
+	}
+}
+
 func (session *querySession) start(clickhouseConnection clickhouseDriver.Conn, sessionStore *querySessionStore) {
 	session.startOnce.Do(func() {
 		session.mutex.Lock()
@@ -189,50 +215,121 @@ func (session *querySession) requestCancellation() {
 // It sends final "done" events (and "error" when applicable) through the critical event channel.
 func (session *querySession) executeQuery(clickhouseConnection clickhouseDriver.Conn, sessionStore *querySessionStore) {
 	executionStartedTime := time.Now()
-
 	defer func() {
-		// Removing the session is safe even if the SSE handler is still streaming: it holds its own pointer.
 		sessionStore.remove(session.queryIdentifier)
 	}()
 
-	queryContext := clickhouse.Context(
-		session.executionContext,
-		clickhouse.WithQueryID(session.queryIdentifier),
+	baseCtx := session.executionContext
+
+	// IMPORTANT: attacher progress/profile/logs via clickhouse.Context
+	ctx := clickhouse.Context(
+		baseCtx,
 		clickhouse.WithSettings(session.settings),
 		clickhouse.WithProgress(session.onProgress),
+		clickhouse.WithProfileInfo(session.onProfileInfo),
 		clickhouse.WithProfileEvents(session.onProfileEvents),
 		clickhouse.WithLogs(session.onLog),
 	)
 
-	rows, queryError := clickhouseConnection.Query(queryContext, session.queryText)
+	rows, queryError := clickhouseConnection.Query(ctx, session.queryText)
 	if queryError != nil {
 		session.finishWithError(time.Now(), queryError, executionStartedTime)
 		return
 	}
+	defer rows.Close()
 
-	// Drain rows without materializing them. The query remains "in flight" until the stream is consumed.
-	for rows.Next() {
-	}
+	columnNames := rows.Columns()
+	columnTypeNames, typeError := resolveDatabaseTypeNames(rows)
 
-	rowsError := rows.Err()
-	closeError := rows.Close()
-
-	if rowsError != nil {
-		session.finishWithError(time.Now(), rowsError, executionStartedTime)
+	if typeError != nil || len(columnTypeNames) != len(columnNames) {
+		// If we cannot resolve types, we should not “guess string” because it will crash on numbers.
+		// Fail early with an actionable error.
+		session.finishWithError(time.Now(), fmt.Errorf("cannot resolve result column types: %w", typeError), executionStartedTime)
 		return
 	}
-	if closeError != nil {
-		session.finishWithError(time.Now(), closeError, executionStartedTime)
+
+	session.trySendCritical(serverSentEventsMessage{
+		eventName: "result_meta",
+		payload: map[string]any{
+			"query_id": session.queryIdentifier,
+			"columns":  columnNames,
+			"types":    columnTypeNames,
+		},
+	})
+
+	columnCount := len(columnNames)
+
+	// Allocate correct scan destinations once and reuse them for every row.
+	scanDestinations := make([]any, columnCount) // pointers given to rows.Scan(...)
+	valuePointers := make([]any, columnCount)    // same pointers, used for stringify
+	for columnIndex := 0; columnIndex < columnCount; columnIndex++ {
+		destinationPointer := allocateScanPointerForDatabaseType(columnTypeNames[columnIndex])
+		scanDestinations[columnIndex] = destinationPointer
+		valuePointers[columnIndex] = destinationPointer
+	}
+
+	for rows.Next() {
+		if scanError := rows.Scan(scanDestinations...); scanError != nil {
+			session.finishWithError(time.Now(), scanError, executionStartedTime)
+			return
+		}
+
+		formattedRow := make([]string, columnCount)
+		for columnIndex := 0; columnIndex < columnCount; columnIndex++ {
+			formattedRow[columnIndex] = stringifyScanPointer(valuePointers[columnIndex])
+		}
+
+		session.mutex.Lock()
+		session.resultRowsReturned++
+		reachedLimit := session.resultPreviewRowLimit > 0 && session.resultRowsReturned >= session.resultPreviewRowLimit
+		if reachedLimit {
+			session.resultTruncated = true
+		}
+		session.mutex.Unlock()
+
+		session.trySendResult(serverSentEventsMessage{
+			eventName: "result_row",
+			payload: map[string]any{
+				"query_id": session.queryIdentifier,
+				"row":      formattedRow,
+			},
+		})
+
+		if reachedLimit {
+			session.requestCancellation()
+			break
+		}
+	}
+
+	if rowsError := rows.Err(); rowsError != nil {
+		session.finishWithError(time.Now(), rowsError, executionStartedTime)
 		return
 	}
 
 	session.finishSuccessfully(time.Now(), executionStartedTime)
 }
 
+
 // finishSuccessfully marks the session as finished and sends the final done event.
 func (session *querySession) finishSuccessfully(finishedTime time.Time, executionStartedTime time.Time) {
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
+
+	// If the query was canceled because the result preview limit was reached,
+	// report a distinct final status.
+	if session.status == querySessionStatusCanceled && session.resultTruncated {
+		session.finishedTime = finishedTime
+		session.trySendCritical(serverSentEventsMessage{
+			eventName: "done",
+			payload:   session.donePayload(finishedTime, querySessionStatusResultLimitReached, nil),
+		})
+		session.logger.Info("query stopped because result limit was reached",
+			"query_identifier", session.queryIdentifier,
+			"duration", finishedTime.Sub(executionStartedTime),
+			"result_rows_returned", session.resultRowsReturned,
+		)
+		return
+	}
 
 	if session.status == querySessionStatusCanceled {
 		session.finishedTime = finishedTime
@@ -260,8 +357,10 @@ func (session *querySession) finishSuccessfully(finishedTime time.Time, executio
 		"duration", finishedTime.Sub(executionStartedTime),
 		"read_rows_total", session.readRowsTotal,
 		"read_bytes_total", session.readBytesTotal,
+		"result_rows_returned", session.resultRowsReturned,
 	)
 }
+
 
 // finishWithError marks the session as errored or canceled and sends "error" (when appropriate) + "done".
 func (session *querySession) finishWithError(finishedTime time.Time, executionError error, executionStartedTime time.Time) {
@@ -271,16 +370,22 @@ func (session *querySession) finishWithError(finishedTime time.Time, executionEr
 	isCancellation := errors.Is(executionError, context.Canceled)
 
 	if session.status == querySessionStatusCanceled || isCancellation {
+		finalStatus := querySessionStatusCanceled
+		if session.resultTruncated {
+			finalStatus = querySessionStatusResultLimitReached
+		}
+
 		session.status = querySessionStatusCanceled
 		session.finishedTime = finishedTime
+
 		session.trySendCritical(serverSentEventsMessage{
 			eventName: "done",
-			payload:   session.donePayload(finishedTime, querySessionStatusCanceled, executionError),
+			payload:   session.donePayload(finishedTime, finalStatus, executionError),
 		})
+
 		session.logger.Info("query canceled",
 			"query_identifier", session.queryIdentifier,
 			"duration", finishedTime.Sub(executionStartedTime),
-			"error", executionError.Error(),
 		)
 		return
 	}
@@ -292,17 +397,34 @@ func (session *querySession) finishWithError(finishedTime time.Time, executionEr
 		eventName: "error",
 		payload:   buildErrorPayload(session.queryIdentifier, executionError),
 	})
+
 	session.trySendCritical(serverSentEventsMessage{
 		eventName: "done",
 		payload:   session.donePayload(finishedTime, querySessionStatusErrored, executionError),
 	})
 
-	session.logger.Error("query errored",
+	session.logger.Info("query errored",
 		"query_identifier", session.queryIdentifier,
 		"duration", finishedTime.Sub(executionStartedTime),
 		"error", executionError.Error(),
 	)
 }
+
+// onProfileInfo is a ClickHouse callback invoked with per-query profile info (summary).
+func (session *querySession) onProfileInfo(profileInfo *clickhouse.ProfileInfo) {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+
+	// ProfileInfo = valeurs globales (souvent envoyées à la fin).
+	// On garde le max au cas où on reçoit plusieurs fois.
+	if profileInfo.Rows > session.readRowsTotal {
+		session.readRowsTotal = profileInfo.Rows
+	}
+	if profileInfo.Bytes > session.readBytesTotal {
+		session.readBytesTotal = profileInfo.Bytes
+	}
+}
+
 
 // onProgress is a ClickHouse callback invoked with query progress deltas.
 func (session *querySession) onProgress(progress *clickhouse.Progress) {
@@ -326,35 +448,51 @@ func (session *querySession) onProfileEvents(profileEvents []clickhouse.ProfileE
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
 
-	for _, profileEvent := range profileEvents {
-		session.threadLastSeenByIdentifier[profileEvent.ThreadID] = now
+	for _, e := range profileEvents {
+		session.threadLastSeenByIdentifier[e.ThreadID] = now
 
-		if profileEvent.Name == "UserTimeMicroseconds" || profileEvent.Name == "OSUserTimeMicroseconds" {
-			session.userTimeMicrosecondsTotal += profileEvent.Value
-		}
-		if profileEvent.Name == "SystemTimeMicroseconds" || profileEvent.Name == "OSSystemTimeMicroseconds" {
-			session.systemTimeMicrosecondsTotal += profileEvent.Value
+		// CPU
+		switch e.Name {
+		case "UserTimeMicroseconds", "OSUserTimeMicroseconds":
+			session.userTimeMicrosecondsTotal += e.Value
+		case "SystemTimeMicroseconds", "OSSystemTimeMicroseconds":
+			session.systemTimeMicrosecondsTotal += e.Value
 		}
 
-		// Best-effort memory gauges (availability depends on server/version/settings).
-		if profileEvent.Name == "MemoryTracking" || profileEvent.Name == "CurrentMemoryUsage" || profileEvent.Name == "MemoryUsage" {
-			valueAsBytes := profileEvent.Value
-			session.currentMemoryBytes = &valueAsBytes
-		}
-		if profileEvent.Name == "PeakMemoryUsage" {
-			valueAsBytes := profileEvent.Value
-			session.peakMemoryBytes = &valueAsBytes
+		// ---- MEMORY (robuste) ----
+		// Certaines versions/builds envoient des noms différents.
+		// On capture tout ce qui contient "Memory" et on met à jour inst/peak intelligemment.
+		if strings.Contains(e.Name, "Memory") || strings.Contains(e.Name, "Mem") {
+			v := int64(e.Value)
+
+			// "current" / inst : MemoryTracking, MemoryUsage, CurrentMemoryUsage, etc.
+			// Si c’est un compteur “current”, on met à jour currentMemoryBytes.
+			if strings.Contains(e.Name, "Tracking") ||
+				strings.Contains(e.Name, "Current") ||
+				strings.Contains(e.Name, "Usage") {
+				// Certains events peuvent être des compteurs cumulés ou non pertinents,
+				// mais en pratique sur ClickHouse les "MemoryTracking/CurrentMemoryUsage" sont en bytes.
+				session.currentMemoryBytes = &v
+			}
+
+			// "peak"
+			if strings.Contains(e.Name, "Peak") {
+				// PeakMemoryUsage / PeakMemoryUsageBytes / etc.
+				if session.peakMemoryBytes == nil || v > *session.peakMemoryBytes {
+					session.peakMemoryBytes = &v
+				}
+			}
 		}
 	}
 }
 
+
 // onLog is a ClickHouse callback invoked with server log messages.
 func (session *querySession) onLog(logEntry *clickhouse.Log) {
+	// The UI does not display log lines.
+	// We only keep this callback to best-effort extract peak memory usage from server logs.
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
-
-	logLine := fmt.Sprintf("%s [%s] %s", logEntry.Time.Format(time.RFC3339), logEntry.Source, logEntry.Text)
-	session.appendLogLine(logLine)
 
 	parsedPeakBytes, parsed := parsePeakMemoryUsageFromLogLine(logEntry.Text)
 	if parsed {
@@ -363,27 +501,14 @@ func (session *querySession) onLog(logEntry *clickhouse.Log) {
 	}
 }
 
+
+
 // appendLogLine adds a log line to a fixed-size ring buffer and emits a best-effort SSE log event.
 func (session *querySession) appendLogLine(line string) {
-	if len(session.logLinesRingBuffer) == 0 {
-		return
-	}
-
-	session.logLinesRingBuffer[session.logLinesRingBufferNextIndex] = line
-	session.logLinesRingBufferNextIndex = (session.logLinesRingBufferNextIndex + 1) % len(session.logLinesRingBuffer)
-
-	if session.logLinesRingBufferCountValid < len(session.logLinesRingBuffer) {
-		session.logLinesRingBufferCountValid++
-	}
-
-	session.trySendNonCritical(serverSentEventsMessage{
-		eventName: "log",
-		payload: map[string]any{
-			"query_id": session.queryIdentifier,
-			"line":     line,
-		},
-	})
+	// Intentionally disabled: the UI does not display logs.
+	_ = line
 }
+
 
 // snapshot returns a copy of the current session state.
 func (session *querySession) snapshot(now time.Time) querySessionSnapshot {
@@ -393,17 +518,6 @@ func (session *querySession) snapshot(now time.Time) querySessionSnapshot {
 	threadLastSeenCopy := make(map[uint64]time.Time, len(session.threadLastSeenByIdentifier))
 	for threadIdentifier, lastSeen := range session.threadLastSeenByIdentifier {
 		threadLastSeenCopy[threadIdentifier] = lastSeen
-	}
-
-	logLines := make([]string, 0, session.logLinesRingBufferCountValid)
-	if session.logLinesRingBufferCountValid > 0 {
-		startIndex := session.logLinesRingBufferNextIndex - session.logLinesRingBufferCountValid
-		if startIndex < 0 {
-			startIndex += len(session.logLinesRingBuffer)
-		}
-		for indexOffset := 0; indexOffset < session.logLinesRingBufferCountValid; indexOffset++ {
-			logLines = append(logLines, session.logLinesRingBuffer[(startIndex+indexOffset)%len(session.logLinesRingBuffer)])
-		}
 	}
 
 	return querySessionSnapshot{
@@ -429,10 +543,10 @@ func (session *querySession) snapshot(now time.Time) querySessionSnapshot {
 
 		threadLastSeenByIdentifier: threadLastSeenCopy,
 		threadPeakCount:            session.threadPeakCount,
-
-		logLines: logLines,
 	}
 }
+
+
 
 // donePayload builds a "done" event payload.
 func (session *querySession) donePayload(now time.Time, status querySessionStatus, executionError error) map[string]any {
@@ -440,18 +554,25 @@ func (session *querySession) donePayload(now time.Time, status querySessionStatu
 	if !session.startedTime.IsZero() {
 		elapsedSeconds = now.Sub(session.startedTime).Seconds()
 	}
+
 	payload := map[string]any{
 		"query_id":        session.queryIdentifier,
 		"status":          status,
 		"elapsed_seconds": elapsedSeconds,
 		"read_rows":       session.readRowsTotal,
 		"read_bytes":      session.readBytesTotal,
+
+		"result_rows_returned": session.resultRowsReturned,
+		"result_truncated":     session.resultTruncated,
 	}
+
 	if executionError != nil {
 		payload["message"] = executionError.Error()
 	}
+
 	return payload
 }
+
 
 // trySendNonCritical sends a message without blocking; if the client is slow, the message is dropped.
 func (session *querySession) trySendNonCritical(message serverSentEventsMessage) {
@@ -467,4 +588,53 @@ func (session *querySession) trySendCritical(message serverSentEventsMessage) {
 	case session.criticalEventChannel <- message:
 	default:
 	}
+}
+
+func endsWithFormatClause(queryText string) bool {
+	trimmed := strings.TrimSpace(queryText)
+	if trimmed == "" {
+		return false
+	}
+
+	// Remove trailing semicolons/spaces.
+	for strings.HasSuffix(trimmed, ";") {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, ";"))
+	}
+
+	lower := strings.ToLower(trimmed)
+
+	// We only accept "format <name>" if it is at the very end of the query
+	// (no extra tokens after the format name).
+	//
+	// This avoids false positives where "format" appears inside strings, comments,
+	// identifiers, or subqueries.
+	lastFormatIndex := strings.LastIndex(lower, " format ")
+	if lastFormatIndex < 0 {
+		return false
+	}
+
+	after := strings.TrimSpace(lower[lastFormatIndex+len(" format "):])
+	if after == "" {
+		return false
+	}
+
+	// Format name is expected to be a single token.
+	// If there are more tokens after it, we do not treat it as a terminal FORMAT clause.
+	parts := strings.Fields(after)
+	if len(parts) != 1 {
+		return false
+	}
+
+	return true
+}
+
+
+func splitTabSeparatedLine(line string) []string {
+	// TabSeparatedWithNamesAndTypes uses tab as delimiter.
+	// Values are not quoted; special chars are escaped by ClickHouse rules.
+	// For MVP we split on '\t' and keep raw strings.
+	if line == "" {
+		return []string{""}
+	}
+	return strings.Split(line, "\t")
 }

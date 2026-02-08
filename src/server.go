@@ -128,27 +128,15 @@ func (server *dashboardServer) handleCreateQuery(httpResponseWriter http.Respons
 	defer requestBodyBytesReader.Close()
 
 	var requestPayload createQueryRequest
-	decoder := json.NewDecoder(requestBodyBytesReader)
-	decoder.DisallowUnknownFields()
-	if decodeError := decoder.Decode(&requestPayload); decodeError != nil {
-		writeErrorJson(httpResponseWriter, http.StatusBadRequest, "invalid_json", decodeError.Error())
+	decodeError := json.NewDecoder(requestBodyBytesReader).Decode(&requestPayload)
+	if decodeError != nil {
+		writeErrorJson(httpResponseWriter, http.StatusBadRequest, "invalid_json", "Invalid JSON request body.")
 		return
 	}
 
 	queryText := strings.TrimSpace(requestPayload.QueryText)
 	if queryText == "" {
-		writeErrorJson(httpResponseWriter, http.StatusBadRequest, "missing_sql", "Field 'sql' must not be empty.")
-		return
-	}
-
-	if !isReadOnlyClickhouseStatement(queryText) {
-		writeErrorJson(httpResponseWriter, http.StatusBadRequest, "forbidden_statement", "Only read-only statements are allowed in this MVP (SELECT/WITH/SHOW/DESCRIBE/DESC/EXPLAIN).")
-		return
-	}
-
-	queryIdentifier, identifierError := generateQueryIdentifier()
-	if identifierError != nil {
-		writeErrorJson(httpResponseWriter, http.StatusInternalServerError, "server_error", "Unable to generate query identifier.")
+		writeErrorJson(httpResponseWriter, http.StatusBadRequest, "missing_sql", "Missing SQL text.")
 		return
 	}
 
@@ -157,32 +145,50 @@ func (server *dashboardServer) handleCreateQuery(httpResponseWriter http.Respons
 		databaseName = server.configuration.clickhouseDatabaseName
 	}
 
-	settings := buildDefaultQuerySettings(server.configuration)
-	for key, value := range requestPayload.Settings {
-		settings[key] = value
+	queryIdentifier, identifierError := generateQueryIdentifier()
+	if identifierError != nil {
+		writeErrorJson(httpResponseWriter, http.StatusInternalServerError, "server_error", "Failed to generate query identifier.")
+		return
 	}
 
-	session := newQuerySession(server.logger, queryIdentifier, queryText, databaseName, settings)
+	settings := buildDefaultQuerySettings(server.configuration)
+	for settingKey, settingValue := range requestPayload.Settings {
+		settings[settingKey] = settingValue
+	}
+
+	session := newQuerySession(
+		server.logger,
+		queryIdentifier,
+		queryText,
+		databaseName,
+		settings,
+		server.configuration.defaultResultPreviewRows,
+	)
+
 	server.querySessionStore.create(session)
 
 	writeJson(httpResponseWriter, http.StatusOK, map[string]any{
 		"query_id":   queryIdentifier,
-		"stream_url": "/api/query/stream?query_id=" + queryIdentifier,
+		"stream_url": fmt.Sprintf("/api/query/stream?query_id=%s", queryIdentifier),
 	})
 }
+
+
 
 // buildDefaultQuerySettings returns ClickHouse settings applied to every query by default.
 func buildDefaultQuerySettings(configuration applicationConfiguration) clickhouse.Settings {
 	return clickhouse.Settings{
-		// Server-side enforcement.
-		"readonly": 1,
+		// IMPORTANT: tu as dit que tu veux autoriser DELETE/DDL => pas de readonly.
+		// "readonly": 1,
 
-		// Basic guardrails for an MVP dashboard.
+		// Guardrails
 		"max_execution_time": configuration.defaultMaximumExecutionTimeSeconds,
 		"max_result_rows":    configuration.defaultMaximumResultRows,
 		"max_result_bytes":   configuration.defaultMaximumResultBytes,
+		"send_logs_level": "information",
 	}
 }
+
 
 // cancelQueryRequest is the request payload for POST /api/query/cancel.
 type cancelQueryRequest struct {
@@ -284,13 +290,11 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		return
 	}
 
-	// SSE response headers.
 	httpResponseWriter.Header().Set("Content-Type", "text/event-stream")
 	httpResponseWriter.Header().Set("Cache-Control", "no-cache")
 	httpResponseWriter.Header().Set("Connection", "keep-alive")
 	httpResponseWriter.Header().Set("X-Accel-Buffering", "no")
 
-	// Initial meta event.
 	_ = writeServerSentEvent(httpResponseWriter, flusher, "meta", map[string]any{
 		"query_id": queryIdentifier,
 		"status":   "connected",
@@ -307,146 +311,311 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		return
 	}
 
+	// Start query (async).
 	session.start(clickhouseConnection, server.querySessionStore)
 
-	// If the browser disconnects, cancel the query (best effort).
+	// Cancel if client disconnects.
 	go func() {
 		<-httpRequest.Context().Done()
 		session.requestCancellation()
 	}()
 
-	metricsTicker := time.NewTicker(500 * time.Millisecond) // 4 Hz
-	defer metricsTicker.Stop()
+	// Publish cadence (stable window for "instant" rates).
+	publishTicker := time.NewTicker(250 * time.Millisecond)
+	defer publishTicker.Stop()
 
 	keepAliveTicker := time.NewTicker(15 * time.Second)
 	defer keepAliveTicker.Stop()
 
-	var previousSnapshotTime time.Time
-	var previousReadRows uint64
-	var previousReadBytes uint64
-	var previousCentralProcessingUnitSeconds float64
+	// ---- metrics state (we only compute "instant" + "max") ----
+	var (
+		prevSampleTime time.Time
+
+		prevReadRows  uint64
+		prevReadBytes uint64
+
+		prevCPUSeconds float64
+
+		cpuInstMaxPercent float64
+
+		threadPeakMax int
+
+		peakMemMaxBytes *int64
+	)
+
+	updateMaxPeakMem := func(v *int64) {
+		if v == nil {
+			return
+		}
+		if peakMemMaxBytes == nil || *v > *peakMemMaxBytes {
+			copied := *v
+			peakMemMaxBytes = &copied
+		}
+	}
+
+	// Build "resource" payload from a snapshot.
+	buildResourcePayload := func(now time.Time, snap querySessionSnapshot) map[string]any {
+		// CPU seconds come from ClickHouse profile events (server-side), not API host.
+		cpuSeconds := float64(snap.userTimeMicrosecondsTotal+snap.systemTimeMicrosecondsTotal) / 1e6
+
+		// Estimate threads from "thread last seen" map.
+		threadCountCurrent, threadCountPeak := estimateThreadCounts(now, snap.threadLastSeenByIdentifier, 2*time.Second, snap.threadPeakCount)
+		if threadCountPeak > threadPeakMax {
+			threadPeakMax = threadCountPeak
+		}
+
+		// Memory: best effort from profile events + logs parsing (peak).
+		updateMaxPeakMem(snap.peakMemoryBytes)
+
+		// Instant rates (stable window = publishTicker interval)
+		rowsPerSecondInst := 0.0
+		bytesPerSecondInst := 0.0
+		cpuInstPercent := 0.0
+
+		if !prevSampleTime.IsZero() {
+			dt := now.Sub(prevSampleTime).Seconds()
+			if dt > 0 {
+				rowsPerSecondInst = float64(snap.readRowsTotal-prevReadRows) / dt
+				bytesPerSecondInst = float64(snap.readBytesTotal-prevReadBytes) / dt
+
+				cpuDelta := cpuSeconds - prevCPUSeconds
+				if cpuDelta < 0 {
+					cpuDelta = 0
+				}
+				cpuInstPercent = (cpuDelta / dt) * 100.0
+				if cpuInstPercent > cpuInstMaxPercent {
+					cpuInstMaxPercent = cpuInstPercent
+				}
+			}
+		}
+
+		prevSampleTime = now
+		prevReadRows = snap.readRowsTotal
+		prevReadBytes = snap.readBytesTotal
+		prevCPUSeconds = cpuSeconds
+
+		payload := map[string]any{
+			"query_id": queryIdentifier,
+
+			// Inst + Max only (simple UI)
+			"rows_per_second_inst":  rowsPerSecondInst,
+			"bytes_per_second_inst": bytesPerSecondInst,
+
+			"cpu_percent_inst":     cpuInstPercent,
+			"cpu_percent_inst_max": cpuInstMaxPercent,
+
+			"thread_count_inst":     threadCountCurrent,
+			"thread_count_inst_max": threadPeakMax,
+		}
+
+		if snap.currentMemoryBytes != nil {
+			payload["memory_bytes_inst"] = *snap.currentMemoryBytes
+		} else {
+			payload["memory_bytes_inst"] = nil
+		}
+
+		if peakMemMaxBytes != nil {
+			payload["memory_bytes_inst_max"] = *peakMemMaxBytes
+		} else {
+			payload["memory_bytes_inst_max"] = nil
+		}
+
+		return payload
+	}
+
+	// ---- progress payload (optional, keep your existing one) ----
+	buildProgressPayload := func(now time.Time, snap querySessionSnapshot) map[string]any {
+		elapsedSeconds := 0.0
+		if !snap.startedTime.IsZero() {
+			elapsedSeconds = now.Sub(snap.startedTime).Seconds()
+		}
+
+		percent, known := calculateProgressPercent(
+			0,
+			snap.readBytesTotal,
+			snap.totalRowsToRead,
+			snap.readRowsTotal,
+		)
+
+		return map[string]any{
+			"query_id":        queryIdentifier,
+			"elapsed_seconds": elapsedSeconds,
+
+			"percent":       percent,
+			"percent_known": known,
+
+			"read_rows":          snap.readRowsTotal,
+			"read_bytes":         snap.readBytesTotal,
+			"total_rows_to_read": snap.totalRowsToRead,
+		}
+	}
+
+	// ---- result batching (~100KiB or at least 1 row) ----
+	const maximumBatchBytes = 100 * 1024
+
+	pendingBatchedRows := make([][]string, 0, 512)
+	pendingBatchBytes := 0
+
+	estimateRowJsonBytes := func(row []string) int {
+		bytes := 2 // []
+		for i := 0; i < len(row); i++ {
+			cell := row[i]
+			bytes += 2             // quotes
+			bytes += len(cell) * 2 // worst-case escaping
+			if i+1 < len(row) {
+				bytes += 1 // comma
+			}
+		}
+		return bytes
+	}
+
+	flushBatchedRows := func() {
+		if len(pendingBatchedRows) == 0 {
+			return
+		}
+		_ = writeServerSentEvent(httpResponseWriter, flusher, "result_rows", map[string]any{
+			"query_id": queryIdentifier,
+			"rows":     pendingBatchedRows,
+		})
+		pendingBatchedRows = pendingBatchedRows[:0]
+		pendingBatchBytes = 0
+	}
+
+	enqueueResultRow := func(message serverSentEventsMessage) {
+		rowEnvelope, ok := message.payload.(map[string]any)
+		if !ok {
+			return
+		}
+		rawRow, ok := rowEnvelope["row"]
+		if !ok {
+			return
+		}
+
+		var rowAsStrings []string
+		switch typed := rawRow.(type) {
+		case []string:
+			rowAsStrings = typed
+		case []any:
+			converted := make([]string, 0, len(typed))
+			for _, item := range typed {
+				converted = append(converted, fmt.Sprint(item))
+			}
+			rowAsStrings = converted
+		default:
+			rowAsStrings = []string{fmt.Sprint(rawRow)}
+		}
+
+		rowBytes := estimateRowJsonBytes(rowAsStrings)
+		if len(pendingBatchedRows) > 0 && pendingBatchBytes+rowBytes >= maximumBatchBytes {
+			flushBatchedRows()
+		}
+
+		pendingBatchedRows = append(pendingBatchedRows, rowAsStrings)
+		pendingBatchBytes += rowBytes
+
+		if pendingBatchBytes >= maximumBatchBytes {
+			flushBatchedRows()
+		}
+	}
+
+	drainResultChannel := func() {
+		for {
+			select {
+			case resultMessage := <-session.resultEventChannel:
+				if resultMessage.eventName == "result_row" {
+					enqueueResultRow(resultMessage)
+					continue
+				}
+				flushBatchedRows()
+				_ = writeServerSentEvent(httpResponseWriter, flusher, resultMessage.eventName, resultMessage.payload)
+			default:
+				flushBatchedRows()
+				return
+			}
+		}
+	}
+
+	// Initial publish.
+	now := time.Now()
+	snap := session.snapshot(now)
+	_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", buildProgressPayload(now, snap))
+	_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", buildResourcePayload(now, snap))
 
 	for {
 		select {
-		case nonCriticalMessage := <-session.nonCriticalEventChannel:
-			_ = writeServerSentEvent(httpResponseWriter, flusher, nonCriticalMessage.eventName, nonCriticalMessage.payload)
+		case resultMessage := <-session.resultEventChannel:
+			if resultMessage.eventName == "result_row" {
+				enqueueResultRow(resultMessage)
+				break
+			}
+			flushBatchedRows()
+			_ = writeServerSentEvent(httpResponseWriter, flusher, resultMessage.eventName, resultMessage.payload)
 
 		case criticalMessage := <-session.criticalEventChannel:
-			_ = writeServerSentEvent(httpResponseWriter, flusher, criticalMessage.eventName, criticalMessage.payload)
 			if criticalMessage.eventName == "done" {
-				return
-			}
+				// Drain any buffered rows first.
+				drainResultChannel()
 
-		case now := <-metricsTicker.C:
-			sessionSnapshot := session.snapshot(now)
+				// Final metrics snapshot (after query end).
+				finalNow := time.Now()
+				finalSnap := session.snapshot(finalNow)
 
-			if sessionSnapshot.status == querySessionStatusCreated {
-				continue
-			}
+				_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", buildProgressPayload(finalNow, finalSnap))
+				_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", buildResourcePayload(finalNow, finalSnap))
 
-			elapsedSeconds := 0.0
-			if !sessionSnapshot.startedTime.IsZero() {
-				elapsedSeconds = now.Sub(sessionSnapshot.startedTime).Seconds()
-			}
+				flushBatchedRows()
 
-			centralProcessingUnitSeconds := float64(sessionSnapshot.userTimeMicrosecondsTotal+sessionSnapshot.systemTimeMicrosecondsTotal) / 1e6
-
-			rowsPerSecondTotal := safeRate(float64(sessionSnapshot.readRowsTotal), elapsedSeconds)
-			bytesPerSecondTotal := safeRate(float64(sessionSnapshot.readBytesTotal), elapsedSeconds)
-
-			progressPercent, progressPercentKnown := calculateProgressPercent(
-				0,
-				sessionSnapshot.readBytesTotal,
-				sessionSnapshot.totalRowsToRead,
-				sessionSnapshot.readRowsTotal,
-			)
-
-			instantRowsPerSecond := 0.0
-			instantBytesPerSecond := 0.0
-			instantCentralProcessingUnitCorePercent := 0.0
-
-			if !previousSnapshotTime.IsZero() {
-				sampleDurationSeconds := now.Sub(previousSnapshotTime).Seconds()
-				readRowsDelta := float64(sessionSnapshot.readRowsTotal - previousReadRows)
-				readBytesDelta := float64(sessionSnapshot.readBytesTotal - previousReadBytes)
-				instantRowsPerSecond = safeRate(readRowsDelta, sampleDurationSeconds)
-				instantBytesPerSecond = safeRate(readBytesDelta, sampleDurationSeconds)
-
-				centralProcessingUnitSecondsDelta := centralProcessingUnitSeconds - previousCentralProcessingUnitSeconds
-				instantCentralProcessingUnitCorePercent = safePercent(centralProcessingUnitSecondsDelta, sampleDurationSeconds)
-			}
-
-			totalCentralProcessingUnitCorePercent := safePercent(centralProcessingUnitSeconds, elapsedSeconds)
-
-			previousSnapshotTime = now
-			previousReadRows = sessionSnapshot.readRowsTotal
-			previousReadBytes = sessionSnapshot.readBytesTotal
-			previousCentralProcessingUnitSeconds = centralProcessingUnitSeconds
-
-			threadCountCurrent, threadCountPeak := estimateThreadCounts(now, sessionSnapshot.threadLastSeenByIdentifier, 2*time.Second, sessionSnapshot.threadPeakCount)
-
-			server.persistThreadPeakCount(session, threadCountPeak)
-
-			progressEventPayload := map[string]any{
-				"query_id":               sessionSnapshot.queryIdentifier,
-				"elapsed_seconds":        elapsedSeconds,
-				"percent":                progressPercent,
-				"percent_known":          progressPercentKnown,
-				"read_rows":              sessionSnapshot.readRowsTotal,
-				"read_bytes":             sessionSnapshot.readBytesTotal,
-				"total_rows_to_read":     sessionSnapshot.totalRowsToRead,
-				"total_bytes_to_read":    0,
-				"rows_per_second":        rowsPerSecondTotal,
-				"bytes_per_second":       bytesPerSecondTotal,
-				"rows_per_second_inst":   instantRowsPerSecond,
-				"bytes_per_second_inst":  instantBytesPerSecond,
-			}
-
-			resourceEventPayload := map[string]any{
-				"query_id": sessionSnapshot.queryIdentifier,
-
-				"central_processing_unit_seconds":              centralProcessingUnitSeconds,
-				"central_processing_unit_core_percent_total":   totalCentralProcessingUnitCorePercent,
-				"central_processing_unit_core_percent_instant": instantCentralProcessingUnitCorePercent,
-
-				"thread_count_current": threadCountCurrent,
-				"thread_count_peak":    threadCountPeak,
-			}
-
-			if sessionSnapshot.currentMemoryBytes != nil {
-				resourceEventPayload["memory_current_bytes"] = *sessionSnapshot.currentMemoryBytes
-			} else {
-				resourceEventPayload["memory_current_bytes"] = nil
-			}
-			if sessionSnapshot.peakMemoryBytes != nil {
-				resourceEventPayload["memory_peak_bytes"] = *sessionSnapshot.peakMemoryBytes
-			} else {
-				resourceEventPayload["memory_peak_bytes"] = nil
-			}
-
-			_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", progressEventPayload)
-			_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", resourceEventPayload)
-
-			if sessionSnapshot.status == querySessionStatusFinished || sessionSnapshot.status == querySessionStatusErrored || sessionSnapshot.status == querySessionStatusCanceled {
-				_ = writeServerSentEvent(httpResponseWriter, flusher, "done", map[string]any{
-					"query_id":        sessionSnapshot.queryIdentifier,
-					"status":          sessionSnapshot.status,
-					"elapsed_seconds": elapsedSeconds,
-					"read_rows":       sessionSnapshot.readRowsTotal,
-					"read_bytes":      sessionSnapshot.readBytesTotal,
+				// OPTIONAL: emit zeros so UI can reset immediately without logic.
+				_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", map[string]any{
+					"query_id":               queryIdentifier,
+					"rows_per_second_inst":   0,
+					"bytes_per_second_inst":  0,
+					"cpu_percent_inst":       0,
+					"cpu_percent_inst_max":   cpuInstMaxPercent,
+					"thread_count_inst":      0,
+					"thread_count_inst_max":  threadPeakMax,
+					"memory_bytes_inst":      0,
+					"memory_bytes_inst_max":  func() any { if peakMemMaxBytes == nil { return nil }; return *peakMemMaxBytes }(),
 				})
+
+				_ = writeServerSentEvent(httpResponseWriter, flusher, "done", criticalMessage.payload)
 				return
 			}
+
+			flushBatchedRows()
+			_ = writeServerSentEvent(httpResponseWriter, flusher, criticalMessage.eventName, criticalMessage.payload)
+
+		case <-publishTicker.C:
+			t := time.Now()
+			s := session.snapshot(t)
+
+			_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", buildProgressPayload(t, s))
+			_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", buildResourcePayload(t, s))
+			flushBatchedRows()
 
 		case <-keepAliveTicker.C:
-			_, _ = fmt.Fprint(httpResponseWriter, ": keep-alive\n\n")
-			flusher.Flush()
+			flushBatchedRows()
+			_ = writeServerSentEvent(httpResponseWriter, flusher, "keepalive", map[string]any{
+				"query_id": queryIdentifier,
+				"time":     time.Now().Format(time.RFC3339),
+			})
 
 		case <-httpRequest.Context().Done():
+			session.requestCancellation()
+			flushBatchedRows()
 			return
+
+		case <-session.nonCriticalEventChannel:
+			// no-op
 		}
 	}
 }
+
+
+
+
+
+
 
 // persistThreadPeakCount stores the latest peak thread count in the session.
 func (server *dashboardServer) persistThreadPeakCount(session *querySession, observedPeak int) {

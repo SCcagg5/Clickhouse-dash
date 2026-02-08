@@ -3,88 +3,93 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ClickHouse Dashboard MVP</title>
+  <title>ClickHouse Dashboard</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
+
 <body>
-  <header class="header">
-    <div class="header__title">ClickHouse Dashboard MVP</div>
-    <div class="header__subtitle">TCP native protocol + Server-Sent Events (no polling)</div>
-  </header>
-
-  <main class="main">
+  <main class="layout">
+    <!-- Top row -->
     <section class="panel panel--query">
-      <div class="panel__title">Query</div>
+      <textarea
+        id="queryTextArea"
+        spellcheck="false"
+        placeholder="Write a ClickHouse query (all statements allowed)">
+      </textarea>
+      <div class="panel_bottom">
+        <div class="statusBlock">
+            <div class="statusPill">
+              <span class="statusPill__label">Status</span>
+              <span id="queryStatusText" class="statusPill__value">idle</span>
+            </div>
 
-      <div class="queryControls">
-        <textarea id="queryTextArea" spellcheck="false" placeholder="Write a read-only ClickHouse query (SELECT/WITH/SHOW/DESCRIBE/DESC/EXPLAIN)"></textarea>
-
-        <div class="queryControls__buttons">
+            <div class="statusPill">
+              <span class="statusPill__label">Query ID</span>
+              <span id="queryIdentifierText" class="statusPill__value statusPill__value--mono">-</span>
+            </div>
+        </div>
+        <div class="queryActions">
           <button id="runButton" class="button button--primary">Run</button>
           <button id="cancelButton" class="button" disabled>Cancel</button>
-        </div>
-
-        <div class="queryControls__meta">
-          <div><span class="label">Query ID:</span> <span id="queryIdentifierText">-</span></div>
-          <div><span class="label">Status:</span> <span id="queryStatusText">idle</span></div>
+          <button id="clearButton" class="button">Clear</button>
         </div>
       </div>
     </section>
 
     <section class="panel panel--metrics">
-      <div class="panel__title">Live metrics</div>
 
-      <div class="metricsGrid">
-        <div class="metric">
-          <div class="metric__label">Elapsed</div>
-          <div class="metric__value" id="elapsedSecondsText">-</div>
+      <div class="metricColumn">
+        <div class="metricCompact">
+          <div class="metricCompact__label">Elapsed</div>
+          <div class="metricCompact__value" id="elapsedSecondsText">-</div>
         </div>
 
-        <div class="metric">
-          <div class="metric__label">Progress</div>
-          <div class="metric__value" id="progressPercentText">-</div>
+        <div class="metricCompact">
+          <div class="metricCompact__label">Progress</div>
+          <div class="metricCompact__value" id="progressPercentText">-</div>
         </div>
 
-        <div class="metric">
-          <div class="metric__label">Read rows</div>
-          <div class="metric__value" id="readRowsText">-</div>
+        <div class="metricCompact">
+          <div class="metricCompact__label">Read</div>
+          <div class="metricCompact__value" id="readCountersText">-</div>
+          <div class="metricCompact__sub" id="readRateText">-</div>
         </div>
 
-        <div class="metric">
-          <div class="metric__label">Read bytes</div>
-          <div class="metric__value" id="readBytesText">-</div>
+        <div class="metricCompact">
+          <div class="metricCompact__label">CPU</div>
+          <div class="metricCompact__value" id="cpuText">-</div>
+          <div class="metricCompact__sub" id="cpuMaxText">-</div>
         </div>
 
-        <div class="metric">
-          <div class="metric__label">Rows / second</div>
-          <div class="metric__value" id="rowsPerSecondText">-</div>
+        <div class="metricCompact">
+          <div class="metricCompact__label">Memory</div>
+          <div class="metricCompact__value" id="memoryText">-</div>
+          <div class="metricCompact__sub" id="memoryMaxText">-</div>
         </div>
 
-        <div class="metric">
-          <div class="metric__label">Bytes / second</div>
-          <div class="metric__value" id="bytesPerSecondText">-</div>
-        </div>
-
-        <div class="metric">
-          <div class="metric__label">Memory (current / peak)</div>
-          <div class="metric__value" id="memoryText">-</div>
-        </div>
-
-        <div class="metric">
-          <div class="metric__label">CPU core percent (total / instant)</div>
-          <div class="metric__value" id="centralProcessingUnitText">-</div>
-        </div>
-
-        <div class="metric">
-          <div class="metric__label">Threads (current / peak)</div>
-          <div class="metric__value" id="threadCountText">-</div>
+        <div class="metricCompact">
+          <div class="metricCompact__label">Threads</div>
+          <div class="metricCompact__value" id="threadText">-</div>
+          <div class="metricCompact__sub" id="threadMaxText">-</div>
         </div>
       </div>
     </section>
 
-    <section class="panel panel--logs">
-      <div class="panel__title">Logs</div>
-      <div id="logsContainer" class="logs"></div>
+    <!-- Bottom row (full width) -->
+    <section class="panel panel--results">
+      <div class="panel__header">
+        <div class="panel__title">Results</div>
+        <div class="panel__meta">
+          <span class="metaItem" id="resultColumnsText"></span>
+        </div>
+      </div>
+      <div class="errorBanner" id="errorBanner" hidden></div>
+      <div class="tableWrap">
+        <table class="resultTable">
+          <thead id="resultTableHead"></thead>
+          <tbody id="resultTableBody"></tbody>
+        </table>
+      </div>
     </section>
   </main>
 

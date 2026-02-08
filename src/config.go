@@ -26,9 +26,12 @@ type applicationConfiguration struct {
 	defaultMaximumResultRows           int
 	defaultMaximumResultBytes          int
 
+	defaultResultPreviewRows int
+
 	sessionExpirationIfNotStarted time.Duration
 	sessionExpirationAfterFinish  time.Duration
 }
+
 
 // loadApplicationConfiguration reads configuration from environment variables and returns a validated configuration.
 func loadApplicationConfiguration() (applicationConfiguration, error) {
@@ -47,34 +50,42 @@ func loadApplicationConfiguration() (applicationConfiguration, error) {
 	clickhousePassword := getEnvironmentVariableOrDefault("CH_PASS", "")
 	clickhouseDatabaseName := strings.TrimSpace(getEnvironmentVariableOrDefault("CH_DATABASE", "default"))
 
-	clickhouseAdministratorUserName := strings.TrimSpace(getEnvironmentVariableOrDefault("CH_ADMIN_USER", ""))
-	clickhouseAdministratorPassword := getEnvironmentVariableOrDefault("CH_ADMIN_PASS", "")
+	clickhouseAdministratorUserName := strings.TrimSpace(getEnvironmentVariableOrDefault("CH_ADMIN_USER", clickhouseUserName))
+	clickhouseAdministratorPassword := getEnvironmentVariableOrDefault("CH_ADMIN_PASS", clickhousePassword)
 
-	clickhouseDialTimeout, clickhouseDialTimeoutError := time.ParseDuration(strings.TrimSpace(getEnvironmentVariableOrDefault("CH_DIAL_TIMEOUT", "5s")))
+	clickhouseDialTimeout, clickhouseDialTimeoutError := parseDurationEnvironmentVariable("CH_DIAL_TIMEOUT", 5*time.Second)
 	if clickhouseDialTimeoutError != nil {
-		return applicationConfiguration{}, fmt.Errorf("invalid CH_DIAL_TIMEOUT: %w", clickhouseDialTimeoutError)
+		return applicationConfiguration{}, clickhouseDialTimeoutError
 	}
 
 	defaultMaximumExecutionTimeSeconds, defaultMaximumExecutionTimeSecondsError := parseNonNegativeIntegerEnvironmentVariable("DEFAULT_MAX_EXECUTION_SECONDS", 60)
 	if defaultMaximumExecutionTimeSecondsError != nil {
 		return applicationConfiguration{}, defaultMaximumExecutionTimeSecondsError
 	}
-	defaultMaximumResultRows, defaultMaximumResultRowsError := parseNonNegativeIntegerEnvironmentVariable("DEFAULT_MAX_RESULT_ROWS", 5000)
+
+	defaultMaximumResultRows, defaultMaximumResultRowsError := parseNonNegativeIntegerEnvironmentVariable("DEFAULT_MAX_RESULT_ROWS", 10000)
 	if defaultMaximumResultRowsError != nil {
 		return applicationConfiguration{}, defaultMaximumResultRowsError
 	}
-	defaultMaximumResultBytes, defaultMaximumResultBytesError := parseNonNegativeIntegerEnvironmentVariable("DEFAULT_MAX_RESULT_BYTES", 50*1024*1024)
+
+	defaultMaximumResultBytes, defaultMaximumResultBytesError := parseNonNegativeIntegerEnvironmentVariable("DEFAULT_MAX_RESULT_BYTES", 10*1024*1024)
 	if defaultMaximumResultBytesError != nil {
 		return applicationConfiguration{}, defaultMaximumResultBytesError
 	}
 
-	sessionExpirationIfNotStarted, sessionExpirationIfNotStartedError := time.ParseDuration(strings.TrimSpace(getEnvironmentVariableOrDefault("SESSION_EXPIRE_IF_NOT_STARTED", "15m")))
-	if sessionExpirationIfNotStartedError != nil {
-		return applicationConfiguration{}, fmt.Errorf("invalid SESSION_EXPIRE_IF_NOT_STARTED: %w", sessionExpirationIfNotStartedError)
+	defaultResultPreviewRows, defaultResultPreviewRowsError := parseNonNegativeIntegerEnvironmentVariable("DEFAULT_RESULT_PREVIEW_ROWS", defaultMaximumResultRows)
+	if defaultResultPreviewRowsError != nil {
+		return applicationConfiguration{}, defaultResultPreviewRowsError
 	}
-	sessionExpirationAfterFinish, sessionExpirationAfterFinishError := time.ParseDuration(strings.TrimSpace(getEnvironmentVariableOrDefault("SESSION_EXPIRE_AFTER_FINISH", "2m")))
+
+	sessionExpirationIfNotStarted, sessionExpirationIfNotStartedError := parseDurationEnvironmentVariable("SESSION_EXPIRE_IF_NOT_STARTED", 2*time.Minute)
+	if sessionExpirationIfNotStartedError != nil {
+		return applicationConfiguration{}, sessionExpirationIfNotStartedError
+	}
+
+	sessionExpirationAfterFinish, sessionExpirationAfterFinishError := parseDurationEnvironmentVariable("SESSION_EXPIRE_AFTER_FINISH", 5*time.Minute)
 	if sessionExpirationAfterFinishError != nil {
-		return applicationConfiguration{}, fmt.Errorf("invalid SESSION_EXPIRE_AFTER_FINISH: %w", sessionExpirationAfterFinishError)
+		return applicationConfiguration{}, sessionExpirationAfterFinishError
 	}
 
 	return applicationConfiguration{
@@ -94,10 +105,13 @@ func loadApplicationConfiguration() (applicationConfiguration, error) {
 		defaultMaximumResultRows:           defaultMaximumResultRows,
 		defaultMaximumResultBytes:          defaultMaximumResultBytes,
 
+		defaultResultPreviewRows: defaultResultPreviewRows,
+
 		sessionExpirationIfNotStarted: sessionExpirationIfNotStarted,
 		sessionExpirationAfterFinish:  sessionExpirationAfterFinish,
 	}, nil
 }
+
 
 // getEnvironmentVariableOrDefault returns the environment variable value if set, otherwise the provided default.
 func getEnvironmentVariableOrDefault(environmentVariableName string, defaultValue string) string {
@@ -119,5 +133,23 @@ func parseNonNegativeIntegerEnvironmentVariable(environmentVariableName string, 
 	if parsedValue < 0 {
 		return 0, fmt.Errorf("invalid %s: must be >= 0", environmentVariableName)
 	}
+	return parsedValue, nil
+}
+
+func parseDurationEnvironmentVariable(variableName string, defaultValue time.Duration) (time.Duration, error) {
+	rawValue := strings.TrimSpace(os.Getenv(variableName))
+	if rawValue == "" {
+		return defaultValue, nil
+	}
+
+	parsedValue, parseError := time.ParseDuration(rawValue)
+	if parseError != nil {
+		return 0, fmt.Errorf("%s must be a valid duration (example: 5s, 1m, 250ms): %w", variableName, parseError)
+	}
+
+	if parsedValue < 0 {
+		return 0, fmt.Errorf("%s must be non-negative", variableName)
+	}
+
 	return parsedValue, nil
 }

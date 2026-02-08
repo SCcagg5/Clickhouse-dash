@@ -4,55 +4,62 @@
   const queryTextAreaElement = document.getElementById("queryTextArea");
   const runButtonElement = document.getElementById("runButton");
   const cancelButtonElement = document.getElementById("cancelButton");
+  const clearButtonElement = document.getElementById("clearButton");
 
   const queryIdentifierTextElement = document.getElementById("queryIdentifierText");
   const queryStatusTextElement = document.getElementById("queryStatusText");
+  const resultColumnsTextElement = document.getElementById("resultColumnsText");
+  const errorBannerElement = document.getElementById("errorBanner");
 
   const elapsedSecondsTextElement = document.getElementById("elapsedSecondsText");
   const progressPercentTextElement = document.getElementById("progressPercentText");
-  const readRowsTextElement = document.getElementById("readRowsText");
-  const readBytesTextElement = document.getElementById("readBytesText");
-  const rowsPerSecondTextElement = document.getElementById("rowsPerSecondText");
-  const bytesPerSecondTextElement = document.getElementById("bytesPerSecondText");
-  const memoryTextElement = document.getElementById("memoryText");
-  const centralProcessingUnitTextElement = document.getElementById("centralProcessingUnitText");
-  const threadCountTextElement = document.getElementById("threadCountText");
+  const readCountersTextElement = document.getElementById("readCountersText");
+  const readRateTextElement = document.getElementById("readRateText");
 
-  const logsContainerElement = document.getElementById("logsContainer");
+  const cpuTextElement = document.getElementById("cpuText");
+  const cpuMaxTextElement = document.getElementById("cpuMaxText");
+  const memoryTextElement = document.getElementById("memoryText");
+  const memoryMaxTextElement = document.getElementById("memoryMaxText");
+  const threadTextElement = document.getElementById("threadText");
+  const threadMaxTextElement = document.getElementById("threadMaxText");
+
+  const resultTableHeadElement = document.getElementById("resultTableHead");
+  const resultTableBodyElement = document.getElementById("resultTableBody");
 
   let activeQueryIdentifier = null;
   let activeEventSource = null;
 
-  function setQueryStatus(statusText) {
-    queryStatusTextElement.textContent = statusText;
+  let resultColumns = [];
+  let pendingRows = [];
+  let scheduledFlush = false;
+  let receivedRowCount = 0;
+
+  const flushBatchSize = 400;
+
+  function setStatus(text) {
+    queryStatusTextElement.textContent = text;
   }
 
-  function setQueryIdentifier(queryIdentifier) {
-    queryIdentifierTextElement.textContent = queryIdentifier || "-";
+  function setQueryIdentifier(text) {
+    queryIdentifierTextElement.textContent = text || "-";
   }
 
-  function clearMetrics() {
-    elapsedSecondsTextElement.textContent = "-";
-    progressPercentTextElement.textContent = "-";
-    readRowsTextElement.textContent = "-";
-    readBytesTextElement.textContent = "-";
-    rowsPerSecondTextElement.textContent = "-";
-    bytesPerSecondTextElement.textContent = "-";
-    memoryTextElement.textContent = "-";
-    centralProcessingUnitTextElement.textContent = "-";
-    threadCountTextElement.textContent = "-";
+  function setError(message) {
+    if (!message) {
+      errorBannerElement.hidden = true;
+      errorBannerElement.textContent = "";
+      return;
+    }
+    errorBannerElement.hidden = false;
+    errorBannerElement.textContent = message;
   }
 
-  function clearLogs() {
-    logsContainerElement.innerHTML = "";
-  }
-
-  function appendLogLine(lineText) {
-    const logLineElement = document.createElement("div");
-    logLineElement.className = "logLine";
-    logLineElement.textContent = lineText;
-    logsContainerElement.appendChild(logLineElement);
-    logsContainerElement.scrollTop = logsContainerElement.scrollHeight;
+  function safelyParseJson(text) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
   }
 
   function formatNumber(value) {
@@ -78,9 +85,7 @@
       scaledValue = scaledValue / 1024;
       unitIndex++;
     }
-    if (unitIndex === 0) {
-      return `${scaledValue.toFixed(0)} ${units[unitIndex]}`;
-    }
+    if (unitIndex === 0) return `${scaledValue.toFixed(0)} ${units[unitIndex]}`;
     return `${scaledValue.toFixed(2)} ${units[unitIndex]}`;
   }
 
@@ -88,6 +93,94 @@
     if (activeEventSource) {
       activeEventSource.close();
       activeEventSource = null;
+    }
+  }
+
+  function clearMetrics() {
+    elapsedSecondsTextElement.textContent = "-";
+    progressPercentTextElement.textContent = "-";
+    readCountersTextElement.textContent = "-";
+    readRateTextElement.textContent = "-";
+
+    cpuTextElement.textContent = "-";
+    cpuMaxTextElement.textContent = "-";
+    memoryTextElement.textContent = "-";
+    memoryMaxTextElement.textContent = "-";
+    threadTextElement.textContent = "-";
+    threadMaxTextElement.textContent = "-";
+
+    setError("");
+  }
+
+  function clearResults() {
+    resultColumns = [];
+    pendingRows = [];
+    scheduledFlush = false;
+    receivedRowCount = 0;
+
+    resultTableHeadElement.innerHTML = "";
+    resultTableBodyElement.innerHTML = "";
+    resultColumnsTextElement.textContent = "-";
+  }
+
+  function setResultMeta(columns) {
+    resultColumns = Array.isArray(columns) ? columns : [];
+
+    const headRow = document.createElement("tr");
+    for (const columnName of resultColumns) {
+      const th = document.createElement("th");
+      th.textContent = String(columnName ?? "");
+      headRow.appendChild(th);
+    }
+
+    resultTableHeadElement.innerHTML = "";
+    resultTableHeadElement.appendChild(headRow);
+
+    resultColumnsTextElement.textContent = `${resultColumns.length} column(s)`;
+  }
+
+  function enqueueRowForRender(row) {
+    pendingRows.push(row);
+    scheduleFlush();
+  }
+
+  function scheduleFlush() {
+    if (scheduledFlush) return;
+    scheduledFlush = true;
+    requestAnimationFrame(flushPendingRows);
+  }
+
+  function flushPendingRows() {
+    scheduledFlush = false;
+    if (pendingRows.length === 0) return;
+
+    const fragment = document.createDocumentFragment();
+    const toRender = Math.min(flushBatchSize, pendingRows.length);
+
+    for (let i = 0; i < toRender; i++) {
+      const row = pendingRows.shift();
+      const tr = document.createElement("tr");
+
+      if (Array.isArray(row)) {
+        for (let columnIndex = 0; columnIndex < resultColumns.length; columnIndex++) {
+          const td = document.createElement("td");
+          const value = row[columnIndex] === undefined || row[columnIndex] === null ? "" : String(row[columnIndex]);
+          td.textContent = value;
+          tr.appendChild(td);
+        }
+      } else {
+        const td = document.createElement("td");
+        td.textContent = String(row);
+        tr.appendChild(td);
+      }
+
+      fragment.appendChild(tr);
+    }
+
+    resultTableBodyElement.appendChild(fragment);
+
+    if (pendingRows.length > 0) {
+      scheduleFlush();
     }
   }
 
@@ -121,6 +214,45 @@
     return responseBody;
   }
 
+  function updateProgress(payload) {
+    elapsedSecondsTextElement.textContent = formatSeconds(payload.elapsed_seconds);
+
+    if (payload.percent_known) {
+      progressPercentTextElement.textContent = `${formatNumber(payload.percent)} %`;
+    } else {
+      progressPercentTextElement.textContent = "indeterminate";
+    }
+
+    readCountersTextElement.textContent =
+      `${formatNumber(payload.read_rows)} rows · ${formatBytes(payload.read_bytes)}`;
+  }
+
+  function updateResource(payload) {
+    // Read rates now come from the "resource" event (inst).
+    const rowsPerSecondInst = payload.rows_per_second_inst;
+    const bytesPerSecondInst = payload.bytes_per_second_inst;
+    readRateTextElement.textContent =
+      `${formatNumber(rowsPerSecondInst)} rows/s · ${formatBytes(bytesPerSecondInst)}/s`;
+
+    // CPU: show inst, and sub shows max(inst)
+    const cpuInst = payload.cpu_percent_inst;
+    const cpuInstMax = payload.cpu_percent_inst_max;
+    cpuTextElement.textContent = `${formatNumber(cpuInst)}% inst`;
+    cpuMaxTextElement.textContent = `max: ${formatNumber(cpuInstMax)}%`;
+
+    // Memory: show inst, and sub shows max(inst)
+    const memInst = payload.memory_bytes_inst;
+    const memMax = payload.memory_bytes_inst_max;
+    memoryTextElement.textContent = memInst === null ? "-" : formatBytes(memInst);
+    memoryMaxTextElement.textContent = `max: ${memMax === null ? "-" : formatBytes(memMax)}`;
+
+    // Threads: show inst and max(inst)
+    const tInst = payload.thread_count_inst;
+    const tMax = payload.thread_count_inst_max;
+    threadTextElement.textContent = `${formatNumber(tInst)}`;
+    threadMaxTextElement.textContent = `max: ${formatNumber(tMax)}`;
+  }
+
   function startStream(streamUrl) {
     closeActiveStream();
 
@@ -130,115 +262,96 @@
     eventSource.addEventListener("meta", (event) => {
       const payload = safelyParseJson(event.data);
       if (!payload) return;
-      setQueryStatus("running");
+      setStatus("running");
       cancelButtonElement.disabled = false;
-      appendLogLine(`connected: query_id=${payload.query_id}`);
+      setError("");
     });
 
     eventSource.addEventListener("progress", (event) => {
       const payload = safelyParseJson(event.data);
       if (!payload) return;
-
-      elapsedSecondsTextElement.textContent = formatSeconds(payload.elapsed_seconds);
-
-      if (payload.percent_known) {
-        progressPercentTextElement.textContent = `${formatNumber(payload.percent)} %`;
-      } else {
-        progressPercentTextElement.textContent = "indeterminate";
-      }
-
-      readRowsTextElement.textContent = formatNumber(payload.read_rows);
-      readBytesTextElement.textContent = formatBytes(payload.read_bytes);
-
-      // Prefer total rates (stable). We also have instant rates, but we keep UI compact.
-      rowsPerSecondTextElement.textContent = `${formatNumber(payload.rows_per_second)} rows/s`;
-      bytesPerSecondTextElement.textContent = `${formatBytes(payload.bytes_per_second)}/s`;
+      updateProgress(payload);
     });
 
     eventSource.addEventListener("resource", (event) => {
       const payload = safelyParseJson(event.data);
       if (!payload) return;
-
-      const currentMemoryText = payload.memory_current_bytes === null ? "-" : formatBytes(payload.memory_current_bytes);
-      const peakMemoryText = payload.memory_peak_bytes === null ? "-" : formatBytes(payload.memory_peak_bytes);
-      memoryTextElement.textContent = `${currentMemoryText} / ${peakMemoryText}`;
-
-      centralProcessingUnitTextElement.textContent = `${formatNumber(payload.central_processing_unit_core_percent_total)} % / ${formatNumber(payload.central_processing_unit_core_percent_instant)} %`;
-
-      threadCountTextElement.textContent = `${formatNumber(payload.thread_count_current)} / ${formatNumber(payload.thread_count_peak)}`;
+      updateResource(payload);
     });
 
-    eventSource.addEventListener("log", (event) => {
+    eventSource.addEventListener("result_meta", (event) => {
       const payload = safelyParseJson(event.data);
       if (!payload) return;
-      appendLogLine(payload.line);
+
+      clearResults();
+      setResultMeta(payload.columns);
+    });
+
+    // Batch-only results event.
+    eventSource.addEventListener("result_rows", (event) => {
+      const payload = safelyParseJson(event.data);
+      if (!payload) return;
+
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      for (const row of rows) {
+        receivedRowCount++;
+          enqueueRowForRender(row);
+      }
     });
 
     eventSource.addEventListener("error", (event) => {
-      // Some browsers also trigger "error" for connection issues. We only show JSON if present.
       const payload = safelyParseJson(event.data);
-      if (payload) {
-        appendLogLine(`error: ${payload.message}`);
-      } else {
-        appendLogLine("error: stream connection issue");
+      if (payload && payload.message) {
+        setError(payload.message);
+        setStatus("error");
       }
-      setQueryStatus("error");
     });
 
     eventSource.addEventListener("done", (event) => {
       const payload = safelyParseJson(event.data);
       if (payload) {
-        appendLogLine(`done: status=${payload.status} elapsed=${formatSeconds(payload.elapsed_seconds)}`);
-        setQueryStatus(payload.status);
+        setStatus(String(payload.status || "done"));
+        elapsedSecondsTextElement.textContent = formatSeconds(payload.elapsed_seconds);
+        if (payload.message) setError(payload.message);
       } else {
-        appendLogLine("done");
-        setQueryStatus("done");
+        setStatus("done");
       }
+
       cancelButtonElement.disabled = true;
       closeActiveStream();
     });
 
-    eventSource.onopen = () => {
-      // No-op: we use the meta event for "connected".
-    };
-
-    eventSource.onerror = () => {
-      // Keep the connection; the server may still be alive. The explicit error SSE event will close on done.
-    };
-  }
-
-  function safelyParseJson(text) {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return null;
-    }
+    eventSource.addEventListener("keepalive", () => {});
+    eventSource.onerror = () => {};
   }
 
   async function handleRun() {
     const queryText = (queryTextAreaElement.value || "").trim();
     if (!queryText) {
-      appendLogLine("Please write a query first.");
+      setError("Please write a query first.");
       return;
     }
 
-    clearLogs();
+    setError("");
     clearMetrics();
-    setQueryStatus("starting...");
+    clearResults();
+
+    setStatus("starting…");
     cancelButtonElement.disabled = true;
     runButtonElement.disabled = true;
 
     try {
       const responsePayload = await createQuery(queryText);
-
       activeQueryIdentifier = responsePayload.query_id;
       setQueryIdentifier(activeQueryIdentifier);
 
-      setQueryStatus("connecting...");
+      setStatus("connecting…");
       startStream(responsePayload.stream_url);
     } catch (error) {
-      setQueryStatus("error");
-      appendLogLine(`error: ${error.message || String(error)}`);
+      setStatus("error");
+      setError(error && error.message ? error.message : String(error));
+      cancelButtonElement.disabled = true;
+      closeActiveStream();
     } finally {
       runButtonElement.disabled = false;
     }
@@ -248,25 +361,39 @@
     if (!activeQueryIdentifier) return;
 
     cancelButtonElement.disabled = true;
-    setQueryStatus("canceling...");
+    setStatus("canceling…");
 
     try {
       await requestCancellation(activeQueryIdentifier);
-      appendLogLine("cancel requested");
     } catch (error) {
-      appendLogLine(`cancel error: ${error.message || String(error)}`);
+      setError(error && error.message ? error.message : String(error));
       cancelButtonElement.disabled = false;
     }
   }
 
-  runButtonElement.addEventListener("click", () => {
-    void handleRun();
-  });
+  function handleClear() {
+    closeActiveStream();
+    activeQueryIdentifier = null;
 
-  cancelButtonElement.addEventListener("click", () => {
-    void handleCancel();
-  });
+    setQueryIdentifier("");
+    setStatus("idle");
 
-  // A reasonable default query for first run.
-  queryTextAreaElement.value = queryTextAreaElement.value || "SELECT count() AS rows FROM system.numbers LIMIT 100000000";
+    clearMetrics();
+    clearResults();
+
+    cancelButtonElement.disabled = true;
+    runButtonElement.disabled = false;
+    setError("");
+  }
+
+  function loadDefaultQueryIfEmpty() {
+    if ((queryTextAreaElement.value || "").trim() !== "") return;
+    queryTextAreaElement.value = "SELECT toString(number) AS dd, 100000000 AS test FROM numbers(10000000000) LIMIT 100";
+  }
+
+  runButtonElement.addEventListener("click", handleRun);
+  cancelButtonElement.addEventListener("click", handleCancel);
+  clearButtonElement.addEventListener("click", handleClear);
+
+  loadDefaultQueryIfEmpty();
 })();
