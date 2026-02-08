@@ -71,7 +71,7 @@
   function formatSeconds(value) {
     if (value === null || value === undefined) return "-";
     if (!Number.isFinite(value)) return "-";
-    return `${value.toFixed(2)} s`;
+    return `${value.toFixed(3)} s`;
   }
 
   function formatBytes(value) {
@@ -237,7 +237,7 @@
     // CPU: show inst, and sub shows max(inst)
     const cpuInst = payload.cpu_percent_inst;
     const cpuInstMax = payload.cpu_percent_inst_max;
-    cpuTextElement.textContent = `${formatNumber(cpuInst)}% inst`;
+    cpuTextElement.textContent = `${formatNumber(cpuInst)}%`;
     cpuMaxTextElement.textContent = `max: ${formatNumber(cpuInstMax)}%`;
 
     // Memory: show inst, and sub shows max(inst)

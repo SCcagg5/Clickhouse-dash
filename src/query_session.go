@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
-	"strings"
-	"fmt"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	clickhouseDriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -25,12 +25,12 @@ const (
 	querySessionStatusResultLimitReached querySessionStatus = "result_limit_reached"
 )
 
+// IMPORTANT: batching côté producteur (executeQuery)
+// => évite de remplir resultEventChannel si le navigateur est plus lent que la DB.
 const (
 	resultBatchRows   = 200
 	resultBatchPeriod = 50 * time.Millisecond
 )
-
-
 
 // querySession contains state and callbacks for a single query execution.
 //
@@ -84,8 +84,6 @@ type querySession struct {
 	resultTruncated       bool
 }
 
-
-
 // querySessionSnapshot is an immutable view of a session at a specific time.
 type querySessionSnapshot struct {
 	queryIdentifier string
@@ -111,7 +109,6 @@ type querySessionSnapshot struct {
 	threadLastSeenByIdentifier map[uint64]time.Time
 	threadPeakCount            int
 }
-
 
 // newQuerySession creates a new query session.
 func newQuerySession(
@@ -142,8 +139,6 @@ func newQuerySession(
 		resultPreviewRowLimit: resultPreviewRowLimit,
 	}
 }
-
-
 
 func (session *querySession) trySendResult(message serverSentEventsMessage) {
 	select {
@@ -221,7 +216,7 @@ func (session *querySession) executeQuery(clickhouseConnection clickhouseDriver.
 
 	baseCtx := session.executionContext
 
-	// IMPORTANT: attacher progress/profile/logs via clickhouse.Context
+	// IMPORTANT: attach progress/profile/logs via clickhouse.Context
 	ctx := clickhouse.Context(
 		baseCtx,
 		clickhouse.WithSettings(session.settings),
@@ -268,6 +263,33 @@ func (session *querySession) executeQuery(clickhouseConnection clickhouseDriver.
 		valuePointers[columnIndex] = destinationPointer
 	}
 
+	// Batch result rows on the producer side to avoid filling session.resultEventChannel.
+	batch := make([][]string, 0, resultBatchRows)
+	lastFlush := time.Now()
+
+	flush := func() bool {
+		if len(batch) == 0 {
+			return true
+		}
+
+		session.trySendResult(serverSentEventsMessage{
+			eventName: "result_rows",
+			payload: map[string]any{
+				"query_id": session.queryIdentifier,
+				"rows":     batch,
+			},
+		})
+
+		batch = make([][]string, 0, resultBatchRows)
+		lastFlush = time.Now()
+
+		// If trySendResult detected a slow client, it requests cancellation.
+		session.mutex.Lock()
+		canceled := session.status == querySessionStatusCanceled
+		session.mutex.Unlock()
+		return !canceled
+	}
+
 	for rows.Next() {
 		if scanError := rows.Scan(scanDestinations...); scanError != nil {
 			session.finishWithError(time.Now(), scanError, executionStartedTime)
@@ -287,19 +309,23 @@ func (session *querySession) executeQuery(clickhouseConnection clickhouseDriver.
 		}
 		session.mutex.Unlock()
 
-		session.trySendResult(serverSentEventsMessage{
-			eventName: "result_row",
-			payload: map[string]any{
-				"query_id": session.queryIdentifier,
-				"row":      formattedRow,
-			},
-		})
+		batch = append(batch, formattedRow)
+
+		// Flush: by batch size OR by time window (keeps UI reactive).
+		if len(batch) >= resultBatchRows || time.Since(lastFlush) >= resultBatchPeriod {
+			if ok := flush(); !ok {
+				break
+			}
+		}
 
 		if reachedLimit {
+			_ = flush()
 			session.requestCancellation()
 			break
 		}
 	}
+
+	_ = flush()
 
 	if rowsError := rows.Err(); rowsError != nil {
 		session.finishWithError(time.Now(), rowsError, executionStartedTime)
@@ -308,7 +334,6 @@ func (session *querySession) executeQuery(clickhouseConnection clickhouseDriver.
 
 	session.finishSuccessfully(time.Now(), executionStartedTime)
 }
-
 
 // finishSuccessfully marks the session as finished and sends the final done event.
 func (session *querySession) finishSuccessfully(finishedTime time.Time, executionStartedTime time.Time) {
@@ -360,7 +385,6 @@ func (session *querySession) finishSuccessfully(finishedTime time.Time, executio
 		"result_rows_returned", session.resultRowsReturned,
 	)
 }
-
 
 // finishWithError marks the session as errored or canceled and sends "error" (when appropriate) + "done".
 func (session *querySession) finishWithError(finishedTime time.Time, executionError error, executionStartedTime time.Time) {
@@ -425,7 +449,6 @@ func (session *querySession) onProfileInfo(profileInfo *clickhouse.ProfileInfo) 
 	}
 }
 
-
 // onProgress is a ClickHouse callback invoked with query progress deltas.
 func (session *querySession) onProgress(progress *clickhouse.Progress) {
 	session.mutex.Lock()
@@ -486,7 +509,6 @@ func (session *querySession) onProfileEvents(profileEvents []clickhouse.ProfileE
 	}
 }
 
-
 // onLog is a ClickHouse callback invoked with server log messages.
 func (session *querySession) onLog(logEntry *clickhouse.Log) {
 	// The UI does not display log lines.
@@ -501,14 +523,11 @@ func (session *querySession) onLog(logEntry *clickhouse.Log) {
 	}
 }
 
-
-
 // appendLogLine adds a log line to a fixed-size ring buffer and emits a best-effort SSE log event.
 func (session *querySession) appendLogLine(line string) {
 	// Intentionally disabled: the UI does not display logs.
 	_ = line
 }
-
 
 // snapshot returns a copy of the current session state.
 func (session *querySession) snapshot(now time.Time) querySessionSnapshot {
@@ -546,8 +565,6 @@ func (session *querySession) snapshot(now time.Time) querySessionSnapshot {
 	}
 }
 
-
-
 // donePayload builds a "done" event payload.
 func (session *querySession) donePayload(now time.Time, status querySessionStatus, executionError error) map[string]any {
 	elapsedSeconds := 0.0
@@ -572,7 +589,6 @@ func (session *querySession) donePayload(now time.Time, status querySessionStatu
 
 	return payload
 }
-
 
 // trySendNonCritical sends a message without blocking; if the client is slow, the message is dropped.
 func (session *querySession) trySendNonCritical(message serverSentEventsMessage) {
@@ -627,7 +643,6 @@ func endsWithFormatClause(queryText string) bool {
 
 	return true
 }
-
 
 func splitTabSeparatedLine(line string) []string {
 	// TabSeparatedWithNamesAndTypes uses tab as delimiter.

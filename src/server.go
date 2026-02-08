@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
@@ -54,7 +53,6 @@ func (server *dashboardServer) serve() error {
 	if subFileSystemError != nil {
 		return subFileSystemError
 	}
-
 
 	multiplexer := http.NewServeMux()
 
@@ -112,12 +110,6 @@ type createQueryRequest struct {
 }
 
 // handleCreateQuery handles POST /api/query.
-//
-// Request body JSON:
-//   { "sql": "...", "database": "optional", "settings": { "max_execution_time": 10, ... } }
-//
-// Response JSON:
-//   { "query_id": "...", "stream_url": "/api/query/stream?query_id=..." }
 func (server *dashboardServer) handleCreateQuery(httpResponseWriter http.ResponseWriter, httpRequest *http.Request) {
 	if httpRequest.Method != http.MethodPost {
 		writeErrorJson(httpResponseWriter, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed.")
@@ -173,8 +165,6 @@ func (server *dashboardServer) handleCreateQuery(httpResponseWriter http.Respons
 	})
 }
 
-
-
 // buildDefaultQuerySettings returns ClickHouse settings applied to every query by default.
 func buildDefaultQuerySettings(configuration applicationConfiguration) clickhouse.Settings {
 	return clickhouse.Settings{
@@ -185,10 +175,9 @@ func buildDefaultQuerySettings(configuration applicationConfiguration) clickhous
 		"max_execution_time": configuration.defaultMaximumExecutionTimeSeconds,
 		"max_result_rows":    configuration.defaultMaximumResultRows,
 		"max_result_bytes":   configuration.defaultMaximumResultBytes,
-		"send_logs_level": "information",
+		"send_logs_level":    "information",
 	}
 }
-
 
 // cancelQueryRequest is the request payload for POST /api/query/cancel.
 type cancelQueryRequest struct {
@@ -196,9 +185,6 @@ type cancelQueryRequest struct {
 }
 
 // handleCancelQuery handles POST /api/query/cancel.
-//
-// Request body JSON:
-//   { "query_id": "..." }
 func (server *dashboardServer) handleCancelQuery(httpResponseWriter http.ResponseWriter, httpRequest *http.Request) {
 	if httpRequest.Method != http.MethodPost {
 		writeErrorJson(httpResponseWriter, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed.")
@@ -240,7 +226,6 @@ func (server *dashboardServer) handleCancelQuery(httpResponseWriter http.Respons
 }
 
 // killQueryBestEffort attempts to stop a running query using KILL QUERY.
-// If the server cancels the query via context cancellation, this is usually unnecessary, but it is a useful fallback.
 func (server *dashboardServer) killQueryBestEffort(queryIdentifier string, databaseName string) {
 	connection, connectionError := server.clickhouseConnectionManager.administratorConnectionForControlPlane(databaseName)
 	if connectionError != nil {
@@ -423,7 +408,7 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		return payload
 	}
 
-	// ---- progress payload (optional, keep your existing one) ----
+	// ---- progress payload ----
 	buildProgressPayload := func(now time.Time, snap querySessionSnapshot) map[string]any {
 		elapsedSeconds := 0.0
 		if !snap.startedTime.IsZero() {
@@ -450,86 +435,14 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		}
 	}
 
-	// ---- result batching (~100KiB or at least 1 row) ----
-	const maximumBatchBytes = 100 * 1024
-
-	pendingBatchedRows := make([][]string, 0, 512)
-	pendingBatchBytes := 0
-
-	estimateRowJsonBytes := func(row []string) int {
-		bytes := 2 // []
-		for i := 0; i < len(row); i++ {
-			cell := row[i]
-			bytes += 2             // quotes
-			bytes += len(cell) * 2 // worst-case escaping
-			if i+1 < len(row) {
-				bytes += 1 // comma
-			}
-		}
-		return bytes
-	}
-
-	flushBatchedRows := func() {
-		if len(pendingBatchedRows) == 0 {
-			return
-		}
-		_ = writeServerSentEvent(httpResponseWriter, flusher, "result_rows", map[string]any{
-			"query_id": queryIdentifier,
-			"rows":     pendingBatchedRows,
-		})
-		pendingBatchedRows = pendingBatchedRows[:0]
-		pendingBatchBytes = 0
-	}
-
-	enqueueResultRow := func(message serverSentEventsMessage) {
-		rowEnvelope, ok := message.payload.(map[string]any)
-		if !ok {
-			return
-		}
-		rawRow, ok := rowEnvelope["row"]
-		if !ok {
-			return
-		}
-
-		var rowAsStrings []string
-		switch typed := rawRow.(type) {
-		case []string:
-			rowAsStrings = typed
-		case []any:
-			converted := make([]string, 0, len(typed))
-			for _, item := range typed {
-				converted = append(converted, fmt.Sprint(item))
-			}
-			rowAsStrings = converted
-		default:
-			rowAsStrings = []string{fmt.Sprint(rawRow)}
-		}
-
-		rowBytes := estimateRowJsonBytes(rowAsStrings)
-		if len(pendingBatchedRows) > 0 && pendingBatchBytes+rowBytes >= maximumBatchBytes {
-			flushBatchedRows()
-		}
-
-		pendingBatchedRows = append(pendingBatchedRows, rowAsStrings)
-		pendingBatchBytes += rowBytes
-
-		if pendingBatchBytes >= maximumBatchBytes {
-			flushBatchedRows()
-		}
-	}
-
+	// Results are already batched on the producer side (query_session.go) as "result_rows".
+	// Here we just forward SSE events as-is.
 	drainResultChannel := func() {
 		for {
 			select {
 			case resultMessage := <-session.resultEventChannel:
-				if resultMessage.eventName == "result_row" {
-					enqueueResultRow(resultMessage)
-					continue
-				}
-				flushBatchedRows()
 				_ = writeServerSentEvent(httpResponseWriter, flusher, resultMessage.eventName, resultMessage.payload)
 			default:
-				flushBatchedRows()
 				return
 			}
 		}
@@ -544,16 +457,11 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 	for {
 		select {
 		case resultMessage := <-session.resultEventChannel:
-			if resultMessage.eventName == "result_row" {
-				enqueueResultRow(resultMessage)
-				break
-			}
-			flushBatchedRows()
 			_ = writeServerSentEvent(httpResponseWriter, flusher, resultMessage.eventName, resultMessage.payload)
 
 		case criticalMessage := <-session.criticalEventChannel:
 			if criticalMessage.eventName == "done" {
-				// Drain any buffered rows first.
+				// Drain any buffered result events first.
 				drainResultChannel()
 
 				// Final metrics snapshot (after query end).
@@ -563,26 +471,28 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 				_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", buildProgressPayload(finalNow, finalSnap))
 				_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", buildResourcePayload(finalNow, finalSnap))
 
-				flushBatchedRows()
-
 				// OPTIONAL: emit zeros so UI can reset immediately without logic.
 				_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", map[string]any{
-					"query_id":               queryIdentifier,
-					"rows_per_second_inst":   0,
-					"bytes_per_second_inst":  0,
-					"cpu_percent_inst":       0,
-					"cpu_percent_inst_max":   cpuInstMaxPercent,
-					"thread_count_inst":      0,
-					"thread_count_inst_max":  threadPeakMax,
-					"memory_bytes_inst":      0,
-					"memory_bytes_inst_max":  func() any { if peakMemMaxBytes == nil { return nil }; return *peakMemMaxBytes }(),
+					"query_id":              queryIdentifier,
+					"rows_per_second_inst":  0,
+					"bytes_per_second_inst": 0,
+					"cpu_percent_inst":      0,
+					"cpu_percent_inst_max":  cpuInstMaxPercent,
+					"thread_count_inst":     0,
+					"thread_count_inst_max": threadPeakMax,
+					"memory_bytes_inst":     0,
+					"memory_bytes_inst_max": func() any {
+						if peakMemMaxBytes == nil {
+							return nil
+						}
+						return *peakMemMaxBytes
+					}(),
 				})
 
 				_ = writeServerSentEvent(httpResponseWriter, flusher, "done", criticalMessage.payload)
 				return
 			}
 
-			flushBatchedRows()
 			_ = writeServerSentEvent(httpResponseWriter, flusher, criticalMessage.eventName, criticalMessage.payload)
 
 		case <-publishTicker.C:
@@ -591,10 +501,8 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 
 			_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", buildProgressPayload(t, s))
 			_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", buildResourcePayload(t, s))
-			flushBatchedRows()
 
 		case <-keepAliveTicker.C:
-			flushBatchedRows()
 			_ = writeServerSentEvent(httpResponseWriter, flusher, "keepalive", map[string]any{
 				"query_id": queryIdentifier,
 				"time":     time.Now().Format(time.RFC3339),
@@ -602,7 +510,6 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 
 		case <-httpRequest.Context().Done():
 			session.requestCancellation()
-			flushBatchedRows()
 			return
 
 		case <-session.nonCriticalEventChannel:
@@ -610,12 +517,6 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		}
 	}
 }
-
-
-
-
-
-
 
 // persistThreadPeakCount stores the latest peak thread count in the session.
 func (server *dashboardServer) persistThreadPeakCount(session *querySession, observedPeak int) {
