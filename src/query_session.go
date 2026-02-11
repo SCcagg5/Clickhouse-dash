@@ -32,6 +32,27 @@ const (
 	resultBatchPeriod = 50 * time.Millisecond
 )
 
+// Telemetry samples (pour les graph) : on collecte des points *plus fins* côté Go (callbacks CH)
+// et on les pousse via SSE (batch) sans impacter le stream de résultats.
+const (
+	telemetryMinPointPeriod   = 80 * time.Millisecond   // throttle: max ~12.5 points/s
+	telemetryFlushPeriod      = 350 * time.Millisecond  // flush batch au plus tard toutes les 350ms
+	telemetryFlushMaxSamples  = 32                      // flush si on accumule trop
+	telemetryMaxBufferedDrop  = 512                     // garde-fou mémoire (drop oldest)
+)
+
+// telemetrySample is a single timeseries point to feed front-end graphs.
+type telemetrySample struct {
+	ElapsedSeconds      float64 `json:"elapsed_seconds"`
+	ReadRows            uint64  `json:"read_rows"`
+	ReadBytes           uint64  `json:"read_bytes"`
+	RowsPerSecondInst   float64 `json:"rows_per_second_inst"`
+	BytesPerSecondInst  float64 `json:"bytes_per_second_inst"`
+	CPUPercentInst      float64 `json:"cpu_percent_inst"`
+	MemoryBytesInst     *int64  `json:"memory_bytes_inst"`
+	ThreadCountInst     int     `json:"thread_count_inst"`
+}
+
 // querySession contains state and callbacks for a single query execution.
 //
 // The session is created by POST /api/query, started on first SSE attach (GET /api/query/stream),
@@ -82,6 +103,17 @@ type querySession struct {
 	resultPreviewRowLimit int
 	resultRowsReturned    int
 	resultTruncated       bool
+
+	// --- telemetry (graph) ---
+	telemetrySamples        []telemetrySample
+	telemetryLastPointTime  time.Time
+	telemetryLastFlushTime  time.Time
+
+	telemetryPrevTime       time.Time
+	telemetryPrevReadRows   uint64
+	telemetryPrevReadBytes  uint64
+	telemetryPrevUserUs     int64
+	telemetryPrevSystemUs   int64
 }
 
 // querySessionSnapshot is an immutable view of a session at a specific time.
@@ -137,9 +169,12 @@ func newQuerySession(
 		threadLastSeenByIdentifier: make(map[uint64]time.Time),
 
 		resultPreviewRowLimit: resultPreviewRowLimit,
+
+		telemetrySamples: make([]telemetrySample, 0, telemetryFlushMaxSamples),
 	}
 }
 
+// trySendResult sends result rows; if the client is too slow, we cancel to avoid OOM.
 func (session *querySession) trySendResult(message serverSentEventsMessage) {
 	select {
 	case session.resultEventChannel <- message:
@@ -154,6 +189,15 @@ func (session *querySession) trySendResult(message serverSentEventsMessage) {
 				"message":  "client is too slow to consume result stream",
 			},
 		})
+	}
+}
+
+// trySendTelemetry is best-effort: drops when client is slow.
+// We keep telemetry on nonCritical channel so it doesn't interfere with result rows or "done".
+func (session *querySession) trySendTelemetry(message serverSentEventsMessage) {
+	select {
+	case session.nonCriticalEventChannel <- message:
+	default:
 	}
 }
 
@@ -174,6 +218,11 @@ func (session *querySession) start(clickhouseConnection clickhouseDriver.Conn, s
 		session.executionContext, session.cancelExecution = context.WithCancel(context.Background())
 		session.startedTime = time.Now()
 		session.status = querySessionStatusRunning
+
+		// init telemetry baseline
+		session.telemetryPrevTime = time.Time{}
+		session.telemetryLastPointTime = time.Time{}
+		session.telemetryLastFlushTime = session.startedTime
 
 		session.logger.Info("query started",
 			"query_identifier", session.queryIdentifier,
@@ -340,6 +389,10 @@ func (session *querySession) finishSuccessfully(finishedTime time.Time, executio
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
 
+	// push a last telemetry point + flush before "done"
+	session.recordTelemetrySampleLocked(finishedTime)
+	session.flushTelemetryLocked(finishedTime)
+
 	// If the query was canceled because the result preview limit was reached,
 	// report a distinct final status.
 	if session.status == querySessionStatusCanceled && session.resultTruncated {
@@ -391,6 +444,10 @@ func (session *querySession) finishWithError(finishedTime time.Time, executionEr
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
 
+	// push a last telemetry point + flush before "done"
+	session.recordTelemetrySampleLocked(finishedTime)
+	session.flushTelemetryLocked(finishedTime)
+
 	isCancellation := errors.Is(executionError, context.Canceled)
 
 	if session.status == querySessionStatusCanceled || isCancellation {
@@ -436,6 +493,8 @@ func (session *querySession) finishWithError(finishedTime time.Time, executionEr
 
 // onProfileInfo is a ClickHouse callback invoked with per-query profile info (summary).
 func (session *querySession) onProfileInfo(profileInfo *clickhouse.ProfileInfo) {
+	now := time.Now()
+
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
 
@@ -447,10 +506,14 @@ func (session *querySession) onProfileInfo(profileInfo *clickhouse.ProfileInfo) 
 	if profileInfo.Bytes > session.readBytesTotal {
 		session.readBytesTotal = profileInfo.Bytes
 	}
+
+	session.recordTelemetrySampleLocked(now)
 }
 
 // onProgress is a ClickHouse callback invoked with query progress deltas.
 func (session *querySession) onProgress(progress *clickhouse.Progress) {
+	now := time.Now()
+
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
 
@@ -462,6 +525,8 @@ func (session *querySession) onProgress(progress *clickhouse.Progress) {
 	if progress.TotalRows > session.totalRowsToRead {
 		session.totalRowsToRead = progress.TotalRows
 	}
+
+	session.recordTelemetrySampleLocked(now)
 }
 
 // onProfileEvents is a ClickHouse callback invoked with per-query profile events.
@@ -489,24 +554,22 @@ func (session *querySession) onProfileEvents(profileEvents []clickhouse.ProfileE
 			v := int64(e.Value)
 
 			// "current" / inst : MemoryTracking, MemoryUsage, CurrentMemoryUsage, etc.
-			// Si c’est un compteur “current”, on met à jour currentMemoryBytes.
 			if strings.Contains(e.Name, "Tracking") ||
 				strings.Contains(e.Name, "Current") ||
 				strings.Contains(e.Name, "Usage") {
-				// Certains events peuvent être des compteurs cumulés ou non pertinents,
-				// mais en pratique sur ClickHouse les "MemoryTracking/CurrentMemoryUsage" sont en bytes.
 				session.currentMemoryBytes = &v
 			}
 
 			// "peak"
 			if strings.Contains(e.Name, "Peak") {
-				// PeakMemoryUsage / PeakMemoryUsageBytes / etc.
 				if session.peakMemoryBytes == nil || v > *session.peakMemoryBytes {
 					session.peakMemoryBytes = &v
 				}
 			}
 		}
 	}
+
+	session.recordTelemetrySampleLocked(now)
 }
 
 // onLog is a ClickHouse callback invoked with server log messages.
@@ -588,6 +651,109 @@ func (session *querySession) donePayload(now time.Time, status querySessionStatu
 	}
 
 	return payload
+}
+
+// recordTelemetrySampleLocked appends a point for graphs (best-effort throttled).
+// IMPORTANT: must be called with session.mutex held.
+func (session *querySession) recordTelemetrySampleLocked(now time.Time) {
+	if session.startedTime.IsZero() {
+		return
+	}
+
+	// throttle point creation
+	if !session.telemetryLastPointTime.IsZero() && now.Sub(session.telemetryLastPointTime) < telemetryMinPointPeriod {
+		// still flush if needed (rare)
+		session.flushTelemetryLocked(now)
+		return
+	}
+	session.telemetryLastPointTime = now
+
+	elapsedSeconds := now.Sub(session.startedTime).Seconds()
+
+	// thread count estimate (based on last seen in callbacks)
+	threadCountInst, threadPeak := estimateThreadCounts(
+		now,
+		session.threadLastSeenByIdentifier,
+		2*time.Second,
+		session.threadPeakCount,
+	)
+	session.threadPeakCount = threadPeak
+
+	// instantaneous deltas
+	var rowsPerSec, bytesPerSec, cpuPct float64
+
+	if !session.telemetryPrevTime.IsZero() {
+		dt := now.Sub(session.telemetryPrevTime).Seconds()
+		if dt > 0 {
+			rowsDelta := session.readRowsTotal - session.telemetryPrevReadRows
+			bytesDelta := session.readBytesTotal - session.telemetryPrevReadBytes
+
+			rowsPerSec = float64(rowsDelta) / dt
+			bytesPerSec = float64(bytesDelta) / dt
+
+			cpuDeltaUs := (session.userTimeMicrosecondsTotal - session.telemetryPrevUserUs) +
+				(session.systemTimeMicrosecondsTotal - session.telemetryPrevSystemUs)
+
+			cpuPct = (float64(cpuDeltaUs) / 1_000_000.0) / dt * 100.0
+		}
+	}
+
+	// update baseline for next point
+	session.telemetryPrevTime = now
+	session.telemetryPrevReadRows = session.readRowsTotal
+	session.telemetryPrevReadBytes = session.readBytesTotal
+	session.telemetryPrevUserUs = session.userTimeMicrosecondsTotal
+	session.telemetryPrevSystemUs = session.systemTimeMicrosecondsTotal
+
+	session.telemetrySamples = append(session.telemetrySamples, telemetrySample{
+		ElapsedSeconds:     elapsedSeconds,
+		ReadRows:           session.readRowsTotal,
+		ReadBytes:          session.readBytesTotal,
+		RowsPerSecondInst:  rowsPerSec,
+		BytesPerSecondInst: bytesPerSec,
+		CPUPercentInst:     cpuPct,
+		MemoryBytesInst:    session.currentMemoryBytes,
+		ThreadCountInst:    threadCountInst,
+	})
+
+	// garde-fou mémoire
+	if len(session.telemetrySamples) > telemetryMaxBufferedDrop {
+		session.telemetrySamples = session.telemetrySamples[len(session.telemetrySamples)-telemetryMaxBufferedDrop:]
+	}
+
+	session.flushTelemetryLocked(now)
+}
+
+// flushTelemetryLocked pushes a batch if time/size threshold reached.
+// IMPORTANT: must be called with session.mutex held.
+func (session *querySession) flushTelemetryLocked(now time.Time) {
+	if len(session.telemetrySamples) == 0 {
+		return
+	}
+
+	needFlush := false
+	if len(session.telemetrySamples) >= telemetryFlushMaxSamples {
+		needFlush = true
+	} else if session.telemetryLastFlushTime.IsZero() || now.Sub(session.telemetryLastFlushTime) >= telemetryFlushPeriod {
+		needFlush = true
+	}
+
+	if !needFlush {
+		return
+	}
+
+	// detach slice for send
+	samples := session.telemetrySamples
+	session.telemetrySamples = make([]telemetrySample, 0, telemetryFlushMaxSamples)
+	session.telemetryLastFlushTime = now
+
+	session.trySendTelemetry(serverSentEventsMessage{
+		eventName: "samples",
+		payload: map[string]any{
+			"query_id": session.queryIdentifier,
+			"samples":  samples,
+		},
+	})
 }
 
 // trySendNonCritical sends a message without blocking; if the client is slow, the message is dropped.

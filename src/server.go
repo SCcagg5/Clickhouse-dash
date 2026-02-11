@@ -448,6 +448,17 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		}
 	}
 
+	drainNonCriticalChannel := func() {
+		for {
+			select {
+			case msg := <-session.nonCriticalEventChannel:
+				_ = writeServerSentEvent(httpResponseWriter, flusher, msg.eventName, msg.payload)
+			default:
+				return
+			}
+		}
+	}
+
 	// Initial publish.
 	now := time.Now()
 	snap := session.snapshot(now)
@@ -463,6 +474,7 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 			if criticalMessage.eventName == "done" {
 				// Drain any buffered result events first.
 				drainResultChannel()
+				drainNonCriticalChannel()
 
 				// Final metrics snapshot (after query end).
 				finalNow := time.Now()
@@ -512,8 +524,8 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 			session.requestCancellation()
 			return
 
-		case <-session.nonCriticalEventChannel:
-			// no-op
+		case nonCriticalMessage := <-session.nonCriticalEventChannel:
+			_ = writeServerSentEvent(httpResponseWriter, flusher, nonCriticalMessage.eventName, nonCriticalMessage.payload)
 		}
 	}
 }
