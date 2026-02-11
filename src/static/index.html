@@ -9,35 +9,40 @@
 
 <body>
   <main class="layout">
-    <!-- Top row -->
     <section class="panel panel--query">
       <textarea
         id="queryTextArea"
         spellcheck="false"
-        placeholder="Write a ClickHouse query (all statements allowed)">
-      </textarea>
+        placeholder="Write a ClickHouse query (all statements allowed)"></textarea>
+
       <div class="panel_bottom">
         <div class="statusBlock">
-            <div class="statusPill">
-              <span class="statusPill__label">Status</span>
-              <span id="queryStatusText" class="statusPill__value">idle</span>
-            </div>
+          <div class="statusPill">
+            <span class="statusPill__label">Status</span>
+            <span id="queryStatusText" class="statusPill__value">idle</span>
+          </div>
 
-            <div class="statusPill">
-              <span class="statusPill__label">Query ID</span>
-              <span id="queryIdentifierText" class="statusPill__value statusPill__value--mono">-</span>
-            </div>
+          <div class="statusPill">
+            <span class="statusPill__label">Query ID</span>
+            <span id="queryIdentifierText" class="statusPill__value statusPill__value--mono">-</span>
+          </div>
         </div>
+
         <div class="queryActions">
           <button id="runButton" class="button button--primary">Run</button>
           <button id="cancelButton" class="button" disabled>Cancel</button>
           <button id="clearButton" class="button">Clear</button>
+
+          <select id="themeSelect" class="button" aria-label="Theme">
+            <option value="system">System</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
         </div>
       </div>
     </section>
 
     <section class="panel panel--metrics">
-
       <div class="metricColumn">
         <div class="metricCompact">
           <div class="metricCompact__label">Elapsed</div>
@@ -75,15 +80,16 @@
       </div>
     </section>
 
-    <!-- Bottom row (full width) -->
     <section class="panel panel--results">
       <div class="panel__header">
         <div class="panel__title">Results</div>
         <div class="panel__meta">
-          <span class="metaItem" id="resultColumnsText"></span>
+          <span class="metaItem" id="resultColumnsText">-</span>
         </div>
       </div>
+
       <div class="errorBanner" id="errorBanner" hidden></div>
+
       <div class="tableWrap">
         <table class="resultTable">
           <thead id="resultTableHead"></thead>

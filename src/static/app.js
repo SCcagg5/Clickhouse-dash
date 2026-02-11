@@ -5,6 +5,7 @@
   const runButtonElement = document.getElementById("runButton");
   const cancelButtonElement = document.getElementById("cancelButton");
   const clearButtonElement = document.getElementById("clearButton");
+  const themeSelectElement = document.getElementById("themeSelect");
 
   const queryIdentifierTextElement = document.getElementById("queryIdentifierText");
   const queryStatusTextElement = document.getElementById("queryStatusText");
@@ -26,13 +27,56 @@
   const resultTableHeadElement = document.getElementById("resultTableHead");
   const resultTableBodyElement = document.getElementById("resultTableBody");
 
+  const THEME_STORAGE_KEY = "chdash.theme";
+
+  function applyTheme(mode) {
+    const root = document.documentElement;
+    if (mode === "light" || mode === "dark") {
+      root.setAttribute("data-theme", mode);
+    } else {
+      root.removeAttribute("data-theme");
+    }
+  }
+
+  function getSavedThemeMode() {
+    const v = localStorage.getItem(THEME_STORAGE_KEY);
+    if (v === "light" || v === "dark" || v === "system") return v;
+    return "system";
+  }
+
+  function setSavedThemeMode(mode) {
+    localStorage.setItem(THEME_STORAGE_KEY, mode);
+  }
+
+  let currentThemeMode = getSavedThemeMode();
+  applyTheme(currentThemeMode);
+
+  if (themeSelectElement) {
+    themeSelectElement.value = currentThemeMode;
+    themeSelectElement.addEventListener("change", () => {
+      currentThemeMode = themeSelectElement.value;
+      setSavedThemeMode(currentThemeMode);
+      applyTheme(currentThemeMode);
+    });
+  }
+
+  const themeMedia = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
+  if (themeMedia && typeof themeMedia.addEventListener === "function") {
+    themeMedia.addEventListener("change", () => {
+      if (currentThemeMode === "system") applyTheme("system");
+    });
+  } else if (themeMedia && typeof themeMedia.addListener === "function") {
+    themeMedia.addListener(() => {
+      if (currentThemeMode === "system") applyTheme("system");
+    });
+  }
+
   let activeQueryIdentifier = null;
   let activeEventSource = null;
 
   let resultColumns = [];
   let pendingRows = [];
   let scheduledFlush = false;
-  let receivedRowCount = 0;
 
   const flushBatchSize = 400;
 
@@ -61,6 +105,28 @@
       return null;
     }
   }
+
+  function formatCompactNumber(value) {
+  if (value === null || value === undefined) return "-";
+  if (!Number.isFinite(value)) return "-";
+
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+
+  const units = ["", "k", "M", "B", "T", "P"];
+  let unitIndex = 0;
+  let scaled = abs;
+
+  while (scaled >= 1000 && unitIndex < units.length - 1) {
+    scaled /= 1000;
+    unitIndex++;
+  }
+
+  const formatted =scaled.toFixed(2).replace(/\.0$/, "");
+
+  return `${sign}${formatted} ${units[unitIndex]}`.trim();
+}
+
 
   function formatNumber(value) {
     if (value === null || value === undefined) return "-";
@@ -116,7 +182,6 @@
     resultColumns = [];
     pendingRows = [];
     scheduledFlush = false;
-    receivedRowCount = 0;
 
     resultTableHeadElement.innerHTML = "";
     resultTableBodyElement.innerHTML = "";
@@ -224,29 +289,25 @@
     }
 
     readCountersTextElement.textContent =
-      `${formatNumber(payload.read_rows)} rows · ${formatBytes(payload.read_bytes)}`;
+      `${formatCompactNumber(payload.read_rows)} rows · ${formatBytes(payload.read_bytes)}`;
   }
 
   function updateResource(payload) {
-    // Read rates now come from the "resource" event (inst).
     const rowsPerSecondInst = payload.rows_per_second_inst;
     const bytesPerSecondInst = payload.bytes_per_second_inst;
     readRateTextElement.textContent =
-      `${formatNumber(rowsPerSecondInst)} rows/s · ${formatBytes(bytesPerSecondInst)}/s`;
+      `${formatCompactNumber(rowsPerSecondInst)} rows/s · ${formatBytes(bytesPerSecondInst)}/s`;
 
-    // CPU: show inst, and sub shows max(inst)
     const cpuInst = payload.cpu_percent_inst;
     const cpuInstMax = payload.cpu_percent_inst_max;
     cpuTextElement.textContent = `${formatNumber(cpuInst)}%`;
     cpuMaxTextElement.textContent = `max: ${formatNumber(cpuInstMax)}%`;
 
-    // Memory: show inst, and sub shows max(inst)
     const memInst = payload.memory_bytes_inst;
     const memMax = payload.memory_bytes_inst_max;
     memoryTextElement.textContent = memInst === null ? "-" : formatBytes(memInst);
     memoryMaxTextElement.textContent = `max: ${memMax === null ? "-" : formatBytes(memMax)}`;
 
-    // Threads: show inst and max(inst)
     const tInst = payload.thread_count_inst;
     const tMax = payload.thread_count_inst_max;
     threadTextElement.textContent = `${formatNumber(tInst)}`;
@@ -287,15 +348,13 @@
       setResultMeta(payload.columns);
     });
 
-    // Batch-only results event.
     eventSource.addEventListener("result_rows", (event) => {
       const payload = safelyParseJson(event.data);
       if (!payload) return;
 
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
       for (const row of rows) {
-        receivedRowCount++;
-          enqueueRowForRender(row);
+        enqueueRowForRender(row);
       }
     });
 

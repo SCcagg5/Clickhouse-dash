@@ -1,73 +1,298 @@
-:root {
-  --bg: #0b0f14;
-  --panel: #0f1623;
-  --panel2: #0b0f14;
-  --border: #1f2a37;
-  --muted: #9aa4b2;
-  --text: #e6edf3;
-  --accent: #1d4ed8;
-  --accentBorder: #2563eb;
-}
-html {
-  scrollbar-gutter: stable;
+@font-face {
+  font-family: "Inter";
+  src: url("/static/fonts/Inter-roman.var.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
 }
 
+@font-face {
+  font-family: "Inter";
+  src: url("/static/fonts/Inter-italic.var.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0f14;
+
+  --border: rgba(148, 163, 184, 0.14);
+  --borderStrong: rgba(148, 163, 184, 0.22);
+
+  --muted: #9aa4b2;
+  --text: #e6edf3;
+
+  --accent: #1d4ed8;
+  --accentBorder: #2563eb;
+
+  --shadow1: 0 0.0625rem 0 rgba(255,255,255,0.04), 0 0.625rem 1.875rem rgba(0,0,0,0.35);
+  --shadow2: 0 0.0625rem 0 rgba(255,255,255,0.04), 0 0.875rem 2.5rem rgba(0,0,0,0.45);
+  --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.25);
+
+  --radius: 0.875rem;
+  --radiusSm: 0.75rem;
+  --radiusPill: 999rem;
+
+  --pageGlow1: radial-gradient(75rem 50rem at 20% -10%, rgba(29, 78, 216, 0.18), transparent 55%);
+  --pageGlow2: radial-gradient(56.25rem 43.75rem at 85% 0%, rgba(37, 99, 235, 0.10), transparent 55%);
+
+  --panelBg: rgba(15, 22, 35, 0.92);
+  --panelTopSheen: rgba(255,255,255,0.04);
+
+  --pillBg: rgba(11, 15, 20, 0.55);
+  --inputBg: rgba(11, 15, 20, 0.75);
+  --tableBg: rgba(11, 15, 20, 0.72);
+  --theadBg: rgba(11, 15, 20, 0.96);
+
+  --scrollTrack: rgba(11, 15, 20, 0.6);
+  --scrollThumb: rgba(148, 163, 184, 0.18);
+  --scrollThumbHover: rgba(148, 163, 184, 0.28);
+  --scrollThumbBorder: rgba(11, 15, 20, 0.8);
+
+  --buttonBg: rgba(17, 26, 42, 0.85);
+  --buttonBgHover: rgba(17, 26, 42, 0.92);
+  --buttonBorder: rgba(148, 163, 184, 0.18);
+  --buttonBorderHover: rgba(148, 163, 184, 0.30);
+  --buttonSheen: rgba(255,255,255,0.05);
+  --buttonSheenHover: rgba(255,255,255,0.07);
+
+  --metricBg: rgba(11, 15, 20, 0.58);
+
+  --rowHover: rgba(29, 78, 216, 0.08);
+  --rowDivider: rgba(148, 163, 184, 0.10);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #f6f8fc;
+
+    --border: rgba(15, 23, 42, 0.14);
+    --borderStrong: rgba(15, 23, 42, 0.22);
+
+    --muted: rgba(0, 41, 138, 0.62);
+    --text: #102c7a;
+    --accent: #c0d0ff;
+
+    --shadow1: 0 0.0625rem 0 rgba(255,255,255,0.55), 0 0.625rem 1.875rem rgba(2, 6, 23, 0.08);
+    --shadow2: 0 0.0625rem 0 rgba(255,255,255,0.55), 0 0.875rem 2.5rem rgba(2, 6, 23, 0.12);
+    --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.20);
+
+    --pageGlow1: radial-gradient(75rem 50rem at 20% -10%, rgba(29, 78, 216, 0.10), transparent 55%);
+    --pageGlow2: radial-gradient(56.25rem 43.75rem at 85% 0%, rgba(37, 99, 235, 0.06), transparent 55%);
+
+    --panelBg: rgba(255, 255, 255, 0.92);
+    --panelTopSheen: rgba(2, 6, 23, 0.03);
+
+    --pillBg: rgba(255, 255, 255, 0.70);
+    --inputBg: rgba(255, 255, 255, 0.85);
+    --tableBg: rgba(255, 255, 255, 0.82);
+    --theadBg: rgba(255, 255, 255, 0.90);
+
+    --scrollTrack: rgba(2, 6, 23, 0.05);
+    --scrollThumb: rgba(15, 23, 42, 0.16);
+    --scrollThumbHover: rgba(15, 23, 42, 0.24);
+    --scrollThumbBorder: rgba(255, 255, 255, 0.85);
+
+    --buttonBg: rgba(255, 255, 255, 0.85);
+    --buttonBgHover: rgba(255, 255, 255, 0.92);
+    --buttonBorder: rgba(15, 23, 42, 0.14);
+    --buttonBorderHover: rgba(15, 23, 42, 0.22);
+    --buttonSheen: rgba(2, 6, 23, 0.03);
+    --buttonSheenHover: rgba(2, 6, 23, 0.04);
+
+    --metricBg: rgba(255, 255, 255, 0.70);
+
+    --rowHover: rgba(29, 78, 216, 0.06);
+    --rowDivider: rgba(15, 23, 42, 0.10);
+  }
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0b0f14;
+
+  --border: rgba(148, 163, 184, 0.14);
+  --borderStrong: rgba(148, 163, 184, 0.22);
+
+  --muted: #9aa4b2;
+  --text: #e6edf3;
+
+  --shadow1: 0 0.0625rem 0 rgba(255,255,255,0.04), 0 0.625rem 1.875rem rgba(0,0,0,0.35);
+  --shadow2: 0 0.0625rem 0 rgba(255,255,255,0.04), 0 0.875rem 2.5rem rgba(0,0,0,0.45);
+  --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.25);
+
+  --pageGlow1: radial-gradient(75rem 50rem at 20% -10%, rgba(29, 78, 216, 0.18), transparent 55%);
+  --pageGlow2: radial-gradient(56.25rem 43.75rem at 85% 0%, rgba(37, 99, 235, 0.10), transparent 55%);
+
+  --panelBg: rgba(15, 22, 35, 0.92);
+  --panelTopSheen: rgba(255,255,255,0.04);
+
+  --pillBg: rgba(11, 15, 20, 0.55);
+  --inputBg: rgba(11, 15, 20, 0.75);
+  --tableBg: rgba(11, 15, 20, 0.72);
+  --theadBg: rgba(11, 15, 20, 0.96);
+
+  --scrollTrack: rgba(11, 15, 20, 0.6);
+  --scrollThumb: rgba(148, 163, 184, 0.18);
+  --scrollThumbHover: rgba(148, 163, 184, 0.28);
+  --scrollThumbBorder: rgba(11, 15, 20, 0.8);
+
+  --buttonBg: rgba(17, 26, 42, 0.85);
+  --buttonBgHover: rgba(17, 26, 42, 0.92);
+  --buttonBorder: rgba(148, 163, 184, 0.18);
+  --buttonBorderHover: rgba(148, 163, 184, 0.30);
+  --buttonSheen: rgba(255,255,255,0.05);
+  --buttonSheenHover: rgba(255,255,255,0.07);
+
+  --metricBg: rgba(11, 15, 20, 0.58);
+
+  --rowHover: rgba(29, 78, 216, 0.08);
+  --rowDivider: rgba(148, 163, 184, 0.10);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f6f8fc;
+
+  --border: rgba(15, 23, 42, 0.14);
+  --borderStrong: rgba(15, 23, 42, 0.22);
+
+  --muted: rgba(0, 41, 138, 0.62);;
+  --text: #102c7a;
+  --accent: #c0d0ff;
+
+  --shadow1: 0 0.0625rem 0 rgba(255,255,255,0.55), 0 0.625rem 1.875rem rgba(2, 6, 23, 0.08);
+  --shadow2: 0 0.0625rem 0 rgba(255,255,255,0.55), 0 0.875rem 2.5rem rgba(2, 6, 23, 0.12);
+  --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.20);
+
+  --pageGlow1: radial-gradient(75rem 50rem at 20% -10%, rgba(29, 78, 216, 0.10), transparent 55%);
+  --pageGlow2: radial-gradient(56.25rem 43.75rem at 85% 0%, rgba(37, 99, 235, 0.06), transparent 55%);
+
+  --panelBg: rgba(255, 255, 255, 0.92);
+  --panelTopSheen: rgba(2, 6, 23, 0.03);
+
+  --pillBg: rgba(255, 255, 255, 0.70);
+  --inputBg: rgba(255, 255, 255, 0.85);
+  --tableBg: rgba(255, 255, 255, 0.82);
+  --theadBg: rgba(255, 255, 255, 0.90);
+
+  --scrollTrack: rgba(2, 6, 23, 0.05);
+  --scrollThumb: rgba(15, 23, 42, 0.16);
+  --scrollThumbHover: rgba(15, 23, 42, 0.24);
+  --scrollThumbBorder: rgba(255, 255, 255, 0.85);
+
+  --buttonBg: rgba(255, 255, 255, 0.85);
+  --buttonBgHover: rgba(255, 255, 255, 0.92);
+  --buttonBorder: rgba(15, 23, 42, 0.14);
+  --buttonBorderHover: rgba(15, 23, 42, 0.22);
+  --buttonSheen: rgba(2, 6, 23, 0.03);
+  --buttonSheenHover: rgba(2, 6, 23, 0.04);
+
+  --metricBg: rgba(255, 255, 255, 0.70);
+
+  --rowHover: rgba(29, 78, 216, 0.06);
+  --rowDivider: rgba(15, 23, 42, 0.10);
+}
+
+html {
+  font-size: 16px;
+  scrollbar-gutter: stable;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
 
 html, body {
   margin: 0;
   padding: 0;
-  background: var(--bg);
+  background: var(--pageGlow1), var(--pageGlow2), var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial;
   overflow-x: hidden;
+  min-height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollThumb);
+  border-radius: 999rem;
+  border: 0.125rem solid var(--scrollThumbBorder);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollThumbHover);
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollTrack);
 }
 
 .layout {
   width: 100%;
-  box-sizing: border-box;
   margin: 0;
-  padding: 12px;
+  padding: 0.875rem;
   display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) 230px;
-  grid-template-rows: auto auto;   /* <- important */
-  align-items: start;              /* <- start est mieux ici */
+  gap: 0.875rem;
+  grid-template-columns: minmax(0, 1fr) 16rem;
+  grid-template-rows: auto auto;
+  align-items: start;
 }
 
-
-@media (max-width: 980px) {
+@media (max-width: 61.25rem) {
   .layout {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
   }
 }
 
 .panel {
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
-  padding: 12px;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--panelTopSheen), transparent 18%), var(--panelBg);
+  box-shadow: var(--shadow1);
+  padding: 0.75rem;
   min-width: 0;
+}
+
+.panel:hover {
+  border-color: var(--borderStrong);
 }
 
 .statusPill {
   display: inline-flex;
-  gap: 8px;
+  gap: 0.5rem;
   align-items: center;
-  padding: 7px 10px; /* slight tweak for tighter alignment */
+  padding: 0.4375rem 0.625rem;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: rgba(11, 15, 20, 0.45);
+  border-radius: var(--radiusPill);
+  background: var(--pillBg);
+  box-shadow: 0 0.0625rem 0 rgba(255,255,255,0.03);
 }
 
 .statusPill__label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
   font-weight: 800;
+  letter-spacing: 0.02em;
 }
 
 .statusPill__value {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 800;
 }
 
@@ -78,113 +303,140 @@ html, body {
 #queryTextArea {
   width: 100%;
   height: 100%;
-  min-height: 210px;
+  min-height: calc(100% - 3rem);
   resize: vertical;
-  padding: 12px;
-  border-radius: 12px;
+  padding: 0.75rem;
+  border-radius: var(--radiusSm);
   border: 1px solid var(--border);
-  background: var(--panel2);
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 18%), var(--inputBg);
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 13px;
-  line-height: 1.45;
-  box-sizing: border-box;
-  flex: 1 1 auto; 
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  outline: none;
 }
 
 #queryTextArea:focus {
-  outline: none;
   border-color: var(--accentBorder);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+  box-shadow: var(--ring);
 }
 
-/* ✅ Bottom bar layout: status + query id + actions aligned on same row */
-.panel_bottom{
-  margin-top: 12px;              /* more air from textarea */
-  display: flex;                 /* align left/right blocks */
+.panel_bottom {
+  margin-top: 0.75rem;
+  display: flex;
   align-items: center;
-  justify-content: space-between; /* status left, actions right */
-  gap: 12px;
-  flex-wrap: wrap;               /* responsive wrap */
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
   flex: 0 0 auto;
 }
 
 .statusBlock {
-  display: flex;   /* align status pills horizontally */
-  gap: 10px;
+  display: flex;
+  gap: 0.625rem;
   flex-wrap: wrap;
 }
 
 .queryActions {
-  display: flex;  /* align buttons horizontally */
-  gap: 10px;
-  float: none;    /* neutralize previous float */
+  display: flex;
+  gap: 0.625rem;
+  float: none;
 }
 
 .button {
-  padding: 9px 12px;
-  border-radius: 10px;
-  border: 1px solid #334155;
-  background: #111a2a;
+  padding: 0.5625rem 0.75rem;
+  border-radius: 0.6875rem;
+  border: 1px solid var(--buttonBorder);
+  background: linear-gradient(180deg, var(--buttonSheen), transparent 35%), var(--buttonBg);
   color: var(--text);
   cursor: pointer;
   font-weight: 800;
-  font-size: 12px;
-
-  /* optional: consistent height/alignment with pills */
-  height: 34px;
+  font-size: 0.75rem;
+  height: 2.125rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  box-shadow: 0 0.0625rem 0 rgba(255,255,255,0.03);
+  user-select: none;
+}
+
+.button:hover {
+  border-color: var(--buttonBorderHover);
+  background: linear-gradient(180deg, var(--buttonSheenHover), transparent 35%), var(--buttonBgHover);
+}
+
+.button:active {
+  transform: translateY(0.0625rem);
 }
 
 .button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  transform: none;
 }
 
 .button--primary {
-  border-color: var(--accentBorder);
-  background: var(--accent);
+  border-color: rgba(37, 99, 235, 0.55);
+  background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 45%, transparent 80%), var(--accent);
+  box-shadow: 0 0.625rem 1.5rem rgba(29, 78, 216, 0.22);
 }
 
-/* optional: on very small screens, keep buttons on the right nicely */
-@media (max-width: 520px) {
-  .queryActions {
-    width: 100%;
-    justify-content: flex-end;
-  }
+.button--primary:hover {
+  border-color: rgba(37, 99, 235, 0.78);
+  box-shadow: 0 0.875rem 2.125rem rgba(29, 78, 216, 0.28);
 }
 
-/* Metrics column: always one column (stacked) */
+select.button {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 2.25rem;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%),
+    linear-gradient(180deg, var(--buttonSheen), transparent 35%);
+  background-position:
+    right 0.95rem center,
+    right 0.70rem center,
+    0 0;
+  background-size:
+    0.45rem 0.45rem,
+    0.45rem 0.45rem,
+    100% 100%;
+  background-repeat: no-repeat;
+}
+
 .metricColumn {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0.625rem;
 }
 
 .metricCompact {
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px;
-  background: rgba(11, 15, 20, 0.55);
+  border-radius: var(--radiusSm);
+  padding: 0.625rem;
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 30%), var(--metricBg);
+  box-shadow: 0 0.0625rem 0 rgba(255,255,255,0.03);
 }
 
 .metricCompact__label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
-  margin-bottom: 6px;
+  margin-bottom: 0.375rem;
   font-weight: 800;
+  letter-spacing: 0.02em;
 }
 
 .metricCompact__value {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 900;
 }
 
 .metricCompact__sub {
-  margin-top: 3px;
-  font-size: 11px;
+  margin-top: 0.1875rem;
+  font-size: 0.6875rem;
   color: var(--muted);
   font-weight: 800;
 }
@@ -192,50 +444,40 @@ html, body {
 .panel--query {
   display: flex;
   flex-direction: column;
-  height: calc(100% - 24px);
+  height: calc(100% - 1.5rem);
 }
 
-/* Results full width */
 .panel--results {
   grid-column: 1 / -1;
   padding-bottom: 0;
 }
 
-.panel--results > .panel__header {
-  margin-bottom: 10px;
-}
-
 .panel__meta {
   display: flex;
-  gap: 10px;
+  gap: 0.625rem;
   align-items: center;
 }
 
 .metaItem {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 800;
 }
 
 .tableWrap {
-  border-radius: 12px;
+  border-radius: var(--radiusSm);
   border: 1px solid var(--border);
-  background: var(--panel2);
-  overflow: visible;     /* plus de scroll interne */
-  max-height: none; 
-}
-
-@media (max-width: 980px) {
-  .tableWrap {
-    max-height: 55vh;
-  }
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 18%), var(--tableBg);
+  overflow: visible;
+  max-height: none;
+  box-shadow: 0 0.0625rem 0 rgba(255,255,255,0.03);
 }
 
 .resultTable {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .resultTable thead th {
@@ -243,33 +485,34 @@ html, body {
   top: 0;
   z-index: 2;
   text-align: left;
-  padding: 10px 10px;
-  background: rgba(11, 15, 20, 0.98);
+  padding: 0.625rem 0.625rem;
+  background: var(--theadBg);
   border-bottom: 1px solid var(--border);
-  color: #cbd5e1;
+  color: color-mix(in srgb, var(--text) 92%, transparent);
   font-weight: 900;
   white-space: nowrap;
+  backdrop-filter: blur(0.375rem);
 }
 
 .resultTable tbody td {
-  padding: 8px 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0.5625rem 0.625rem;
+  border-bottom: 1px solid var(--rowDivider);
   vertical-align: top;
   white-space: pre;
 }
 
 .resultTable tbody tr:hover td {
-  background: rgba(29, 78, 216, 0.08);
+  background: var(--rowHover);
 }
 
 .errorBanner {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
+  margin-top: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radiusSm);
   border: 1px solid rgba(239, 68, 68, 0.35);
   background: rgba(239, 68, 68, 0.12);
   color: #fecaca;
   font-weight: 900;
-  font-size: 12px;
+  font-size: 0.75rem;
   white-space: pre-wrap;
 }

@@ -1,225 +1,189 @@
-# ClickHouse Dashboard MVP (TCP + SSE)
+# ClickHouse Dash
 
-A minimal ClickHouse dashboard that focuses on **query execution telemetry** (progress + timing + profile events) and streams updates to the browser using **Server-Sent Events** (no browser polling).
+A small, ultra-minimal ClickHouse web dashboard to run SQL queries and stream results + live metrics via **Server-Sent Events (SSE)**.
 
-This project intentionally keeps the UI small and the backend strict and defensive.
+It’s designed to be fast, simple, and safe-ish by default (timeouts, max rows/bytes), while still allowing “full SQL” depending on your ClickHouse settings.
 
-## Why TCP (native protocol) instead of ClickHouse HTTP?
+## Features
 
-ClickHouse has a binary native protocol that provides **progress packets** and **profile events** while the query is running — this is what `clickhouse-client` relies on. Implementing the binary protocol correctly is non-trivial, so this MVP uses the official Go client library:
+* Run ClickHouse queries from a web UI
+* Stream results over SSE:
 
-- `github.com/ClickHouse/clickhouse-go/v2`
+  * `result_meta` (columns + types)
+  * `result_rows` (batched rows)
+  * `progress` and `resource` metrics
+  * `error` and `done`
+* Live metrics:
 
-Everything else uses the Go standard library.
+  * elapsed time, progress
+  * read rows/bytes + inst. rate
+  * CPU (%), memory (inst/max), threads (inst/max)
+* Cancel:
 
-## Run
+  * cancels the running query via context cancellation
+  * best-effort fallback `KILL QUERY ... SYNC` using admin credentials
+* Built-in guardrails via ClickHouse settings:
 
-### 1) Set environment variables
+  * `max_execution_time`, `max_result_rows`, `max_result_bytes`
+* Static frontend embedded into the Go binary (`embed`)
 
-```bash
-export LISTEN="127.0.0.1:8080"
+## Requirements
 
-# ClickHouse native protocol address (TCP) or DSN
-export CH_URL="127.0.0.1:9000"
-export CH_USER="default"
-export CH_PASS=""
-export CH_DATABASE="default"
+* Go **1.22+**
+* A reachable ClickHouse server (native protocol by default)
+* Optional: admin credentials if you want `KILL QUERY` to work reliably
 
-# Optional: admin credentials used for best-effort KILL QUERY fallback
-export CH_ADMIN_USER=""
-export CH_ADMIN_PASS=""
-
-# Optional: ClickHouse TCP dial timeout
-export CH_DIAL_TIMEOUT="5s"
-
-# Default query guardrails
-export DEFAULT_MAX_EXECUTION_SECONDS="60"
-export DEFAULT_MAX_RESULT_ROWS="5000"
-export DEFAULT_MAX_RESULT_BYTES="52428800"
-```
-
-`CH_URL` can be either:
-
-- `127.0.0.1:9000` (or multiple: `host1:9000,host2:9000`)
-- a DSN supported by `clickhouse-go`, e.g. `clickhouse://host:9000/default`
-
-### 2) Start
+## Quick start
 
 ```bash
+# From repo root (adjust if your main package is under src/)
+cd src
+
+go mod download
 go run .
 ```
 
-Open:
+Then open:
 
-- `http://127.0.0.1:8080`
+* UI: `http://127.0.0.1:8080/`
+* Health: `http://127.0.0.1:8080/healthz`
+
+## Configuration
+
+All runtime configuration is read from environment variables.
+
+### Server
+
+| Variable      |     Default | Description                  |
+| ------------- | ----------: | ---------------------------- |
+| `LISTEN_HOST` | `127.0.0.1` | Host to bind the HTTP server |
+| `LISTEN_PORT` |      `8080` | Port to bind the HTTP server |
+
+### ClickHouse connection
+
+| Variable          |          Default | Description                                                |
+| ----------------- | ---------------: | ---------------------------------------------------------- |
+| `CH_URL`          | `127.0.0.1:9000` | ClickHouse address or DSN (depending on your driver setup) |
+| `CH_USER`         |        `default` | ClickHouse username                                        |
+| `CH_PASS`         |        *(empty)* | ClickHouse password                                        |
+| `CH_DATABASE`     |        `default` | Default database for queries                               |
+| `CH_DIAL_TIMEOUT` |             `5s` | Dial timeout (Go duration, e.g. `250ms`, `5s`, `1m`)       |
+
+### Admin credentials (optional, for `KILL QUERY` fallback)
+
+If not set, admin credentials default to `CH_USER` / `CH_PASS`.
+
+| Variable        |   Default | Description                                   |
+| --------------- | --------: | --------------------------------------------- |
+| `CH_ADMIN_USER` | `CH_USER` | Admin username used for control-plane actions |
+| `CH_ADMIN_PASS` | `CH_PASS` | Admin password used for control-plane actions |
+
+### Default query limits / guardrails
+
+| Variable                        |                   Default | Description                                               |
+| ------------------------------- | ------------------------: | --------------------------------------------------------- |
+| `DEFAULT_MAX_EXECUTION_SECONDS` |                      `60` | ClickHouse `max_execution_time` (seconds)                 |
+| `DEFAULT_MAX_RESULT_ROWS`       |                   `10000` | ClickHouse `max_result_rows`                              |
+| `DEFAULT_MAX_RESULT_BYTES`      |                `10485760` | ClickHouse `max_result_bytes` (10 MiB)                    |
+| `DEFAULT_RESULT_PREVIEW_ROWS`   | `DEFAULT_MAX_RESULT_ROWS` | Server-side preview limit (UI streaming stops after this) |
+
+### Query session expiration
+
+| Variable                        | Default | Description                                                          |
+| ------------------------------- | ------: | -------------------------------------------------------------------- |
+| `SESSION_EXPIRE_IF_NOT_STARTED` |    `2m` | Expire query sessions if the client never attaches to the SSE stream |
+| `SESSION_EXPIRE_AFTER_FINISH`   |    `5m` | Expire sessions after completion                                     |
+
+### Example
+
+```bash
+export LISTEN_HOST=0.0.0.0
+export LISTEN_PORT=8080
+
+export CH_URL=clickhouse:9000
+export CH_USER=default
+export CH_PASS=
+export CH_DATABASE=default
+
+export DEFAULT_MAX_EXECUTION_SECONDS=30
+export DEFAULT_MAX_RESULT_ROWS=50000
+export DEFAULT_MAX_RESULT_BYTES=$((50*1024*1024))
+export DEFAULT_RESULT_PREVIEW_ROWS=20000
+
+cd src && go run .
+```
 
 ## API
 
 ### `POST /api/query`
 
-Request body:
+Creates a new query session.
+
+**Request JSON**
 
 ```json
 {
-  "sql": "SELECT ...",
-  "database": "optional",
+  "sql": "SELECT 1",
+  "database": "optional_db",
   "settings": {
     "max_execution_time": 10
   }
 }
 ```
 
-Response:
+**Response JSON**
 
 ```json
 {
-  "query_id": "9b6c2b3e-7f5a-4f9f-b0d7-2e1b0e0f9c2a",
-  "stream_url": "/api/query/stream?query_id=..."
+  "query_id": "…",
+  "stream_url": "/api/query/stream?query_id=…"
 }
 ```
-
-Read-only guard (MVP):
-- Only statements starting with **SELECT / WITH / SHOW / DESCRIBE / DESC / EXPLAIN** are accepted.
-- The server also sets ClickHouse setting `readonly=1` on every query.
 
 ### `GET /api/query/stream?query_id=...`
 
-This is an **SSE** endpoint (EventSource). It starts the ClickHouse query on first attach and pushes events.
+SSE stream for a query session.
 
-Event types:
+Event types you may receive:
 
-- `meta`
-- `progress`
-- `resource`
-- `log` (extra, best effort)
-- `error`
-- `done`
-
-#### `meta`
-
-```json
-{
-  "query_id": "...",
-  "status": "connected"
-}
-```
-
-#### `progress`
-
-```json
-{
-  "query_id": "...",
-  "elapsed_seconds": 12.34,
-
-  "percent": 56.7,
-  "percent_known": true,
-
-  "read_rows": 123456,
-  "read_bytes": 987654321,
-  "total_rows_to_read": 217000,
-
-  "rows_per_second": 10000.2,
-  "bytes_per_second": 800000.0,
-
-  "rows_per_second_inst": 12000.0,
-  "bytes_per_second_inst": 900000.0
-}
-```
-
-Progress percent rules:
-1. If `total_bytes_to_read > 0`: `read_bytes / total_bytes_to_read * 100`
-2. Else if `total_rows_to_read > 0`: `read_rows / total_rows_to_read * 100`
-3. Else: `percent_known=false` (indeterminate)
-
-With the native protocol, ClickHouse progress packets typically provide **total rows**, not total bytes.
-
-#### `resource`
-
-```json
-{
-  "query_id": "...",
-
-  "central_processing_unit_seconds": 1.23,
-  "central_processing_unit_core_percent_total": 150.0,
-  "central_processing_unit_core_percent_instant": 220.0,
-
-  "memory_current_bytes": 123456789,
-  "memory_peak_bytes": 234567890,
-
-  "thread_count_current": 8,
-  "thread_count_peak": 12
-}
-```
-
-Notes:
-- CPU percentages can exceed 100% (multi-thread execution).
-- Memory + threads are **best effort**. The native protocol does not expose stable per-query "current memory" and "current threads" gauges in all configurations. This MVP tries:
-  - CPU: from `ProfileEvents` (`UserTimeMicroseconds` + `SystemTimeMicroseconds`)
-  - Memory: from profile events (if present) and/or log parsing ("Peak memory usage")
-  - Threads: inferred from active profile-event thread identifiers in a recent time window
-
-#### `log` (best effort)
-
-```json
-{
-  "query_id": "...",
-  "line": "2026-02-06T12:34:56Z [SomeComponent] some log text"
-}
-```
-
-#### `error`
-
-```json
-{
-  "query_id": "...",
-  "message": "ClickHouse error ...",
-  "code": 123
-}
-```
-
-#### `done`
-
-```json
-{
-  "query_id": "...",
-  "status": "finished",
-  "elapsed_seconds": 12.34,
-  "read_rows": 123456,
-  "read_bytes": 987654321
-}
-```
+* `meta`
+* `progress`
+* `resource`
+* `result_meta`
+* `result_rows`
+* `error`
+* `done`
+* `keepalive`
 
 ### `POST /api/query/cancel`
 
-Request body:
+Requests cancellation of a running query.
+
+**Request JSON**
 
 ```json
-{ "query_id": "..." }
+{ "query_id": "…" }
 ```
 
-Behavior:
-- Cancels the local query context (native protocol cancellation).
-- Also attempts `KILL QUERY WHERE query_id = '...' SYNC` as a best-effort fallback (requires privileges).
+**Response JSON**
 
-## ClickHouse read-only user (concept)
+```json
+{ "query_id": "…", "status": "cancel_requested" }
+```
 
-For a safer setup, create a dedicated read-only user:
+## Notes on performance / “client is too slow”
 
-- Grant only SELECT (and optionally SHOW/DESCRIBE/EXPLAIN permissions).
-- Prefer a separate admin user for `KILL QUERY` (or disable KILL by leaving CH_ADMIN_* empty).
+Results are batched server-side and sent as `result_rows` events to avoid flooding the SSE channel and to protect memory usage when the browser cannot render fast enough.
 
-Exact SQL depends on your ClickHouse version and access management configuration.
+If the client still can’t keep up, the server may cancel the query to avoid unbounded buffering.
 
-## Known limitations (MVP)
+## Releases
 
-- No query result rendering (the dashboard drains results to complete the query, but does not display rows).
-- Memory and thread metrics are best effort with the native protocol.
-- No authentication on the dashboard itself (run behind a reverse proxy if needed).
-- Sessions are in-memory and expire automatically after completion.
+This repository is set up for tag-based releases (GitHub Actions + GoReleaser).
 
-## Build
+Create and push a tag:
 
 ```bash
-go build -o chdash .
-./chdash
+git tag v0.1.0
+git push origin v0.1.0
 ```
