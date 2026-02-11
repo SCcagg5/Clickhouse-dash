@@ -49,33 +49,42 @@
           <div class="metricCompact__value" id="elapsedSecondsText">-</div>
         </div>
 
+
         <div class="metricCompact">
           <div class="metricCompact__label">Progress</div>
           <div class="metricCompact__value" id="progressPercentText">-</div>
+
+          <div class="progressBar" id="progressBar" aria-label="Query progress">
+            <div class="progressBar__fill" id="progressBarFill"></div>
+          </div>
         </div>
 
         <div class="metricCompact">
           <div class="metricCompact__label">Read</div>
           <div class="metricCompact__value" id="readCountersText">-</div>
           <div class="metricCompact__sub" id="readRateText">-</div>
+          <canvas id="readChart" class="sparkline" aria-label="Read progression"></canvas>
         </div>
 
         <div class="metricCompact">
           <div class="metricCompact__label">CPU</div>
           <div class="metricCompact__value" id="cpuText">-</div>
           <div class="metricCompact__sub" id="cpuMaxText">-</div>
+          <canvas id="cpuChart" class="sparkline" aria-label="CPU progression"></canvas>
         </div>
 
         <div class="metricCompact">
           <div class="metricCompact__label">Memory</div>
           <div class="metricCompact__value" id="memoryText">-</div>
           <div class="metricCompact__sub" id="memoryMaxText">-</div>
+          <canvas id="memoryChart" class="sparkline" aria-label="Memory progression"></canvas>
         </div>
 
         <div class="metricCompact">
           <div class="metricCompact__label">Threads</div>
           <div class="metricCompact__value" id="threadText">-</div>
           <div class="metricCompact__sub" id="threadMaxText">-</div>
+          <canvas id="threadChart" class="sparkline" aria-label="Threads progression"></canvas>
         </div>
       </div>
     </section>

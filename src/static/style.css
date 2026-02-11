@@ -516,3 +516,90 @@ select.button {
   font-size: 0.75rem;
   white-space: pre-wrap;
 }
+
+.sparkline {
+  width: 100%;
+  height: 2.25rem;
+  margin-top: 0.45rem;
+  display: block;
+  border-radius: 0.5rem;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 60%);
+  border: 1px solid var(--border);
+}
+
+.progressBar {
+  margin-top: 0.45rem;
+  height: 0.55rem;
+  border-radius: 999rem;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.progressBar__fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999rem;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.95), rgba(37, 99, 235, 0.35));
+  box-shadow: 0 0.5rem 1.25rem rgba(29, 78, 216, 0.20);
+  transition: width 160ms ease;
+}
+
+.progressBar--indeterminate .progressBar__fill {
+  width: 45%;
+  animation: progressIndeterminate 1100ms ease-in-out infinite;
+}
+
+@keyframes progressIndeterminate {
+  0% { transform: translateX(-110%); }
+  50% { transform: translateX(40%); }
+  100% { transform: translateX(220%); }
+}
+
+.metricCompact {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Tout le texte au-dessus */
+.metricCompact__content {
+  position: relative;
+  z-index: 2;
+}
+
+/* Canvas en fond */
+.metricCompact__bgChart {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.22;              /* ajuste: 0.12 -> 0.30 */
+  filter: blur(0.2px);        /* optionnel, donne un rendu plus doux */
+}
+
+/* Petit voile pour garder le texte super lisible */
+.metricCompact::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(180deg,
+    rgba(0,0,0,0.22) 0%,
+    rgba(0,0,0,0.10) 38%,
+    rgba(0,0,0,0.00) 100%
+  );
+  pointer-events: none;
+  opacity: 0.35;              /* ajuste selon ton thème */
+}
+
+/* En light mode, on réduit l’assombrissement */
+html[data-theme="light"] .metricCompact::after {
+  background: linear-gradient(180deg,
+    rgba(255,255,255,0.55) 0%,
+    rgba(255,255,255,0.20) 42%,
+    rgba(255,255,255,0.00) 100%
+  );
+  opacity: 0.55;
+}
