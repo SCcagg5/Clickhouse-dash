@@ -1,189 +1,220 @@
 # ClickHouse Dash
 
-A small, ultra-minimal ClickHouse web dashboard to run SQL queries and stream results + live metrics via **Server-Sent Events (SSE)**.
+A real-time ClickHouse query dashboard with live metrics, high-frequency sampling, and zero-dependency frontend.
 
-It’s designed to be fast, simple, and safe-ish by default (timeouts, max rows/bytes), while still allowing “full SQL” depending on your ClickHouse settings.
+<p align="center">
+  <img src=".github/.ressources/screenshot.png" width="900" />
+</p>
 
-## Features
+---
 
-* Run ClickHouse queries from a web UI
-* Stream results over SSE:
+## ✨ Features
 
-  * `result_meta` (columns + types)
-  * `result_rows` (batched rows)
-  * `progress` and `resource` metrics
-  * `error` and `done`
-* Live metrics:
+* 🔎 Execute any ClickHouse SQL query
+* 📊 Real-time metrics streaming via SSE
+* ⚡ 10ms internal sampling resolution
+* 📡 4 SSE updates per second
+* 📈 Smooth background sparkline charts
+* 📦 Single lightweight binary (Go)
+* 🎨 Modern dark/light UI (Inter font)
+* 🧠 Automatic rate derivation (rows/sec & bytes/sec)
+* 🛑 Query cancellation (including `KILL QUERY`)
+* 🔐 SQL guard support
 
-  * elapsed time, progress
-  * read rows/bytes + inst. rate
-  * CPU (%), memory (inst/max), threads (inst/max)
-* Cancel:
+---
 
-  * cancels the running query via context cancellation
-  * best-effort fallback `KILL QUERY ... SYNC` using admin credentials
-* Built-in guardrails via ClickHouse settings:
+## 🏗 Architecture
 
-  * `max_execution_time`, `max_result_rows`, `max_result_bytes`
-* Static frontend embedded into the Go binary (`embed`)
+Backend: **Go + clickhouse-go v2**
+Frontend: **Vanilla JS + Canvas**
+Transport: **Server-Sent Events (SSE)**
 
-## Requirements
+```
+Browser
+   │
+   │  /api/query
+   │  /api/query/stream (SSE)
+   ▼
+Go HTTP Server
+   │
+   ▼
+ClickHouse
+```
 
-* Go **1.22+**
-* A reachable ClickHouse server (native protocol by default)
-* Optional: admin credentials if you want `KILL QUERY` to work reliably
+---
 
-## Quick start
+## 📊 Metrics Model
 
-```bash
-# From repo root (adjust if your main package is under src/)
+Each `tick` SSE event contains:
+
+```
+[
+  t_ms,
+  percent, percent_known,
+  read_rows, read_bytes, total_rows,
+  rows_per_sec, bytes_per_sec,
+  cpu_bp, cpu_max_bp,
+  mem_inst, mem_max,
+  threads_inst, threads_max,
+  samples[]
+]
+```
+
+Where:
+
+* `samples[]` = 10ms resolution samples between two ticks
+* Charts use:
+
+  * **Rows chart → rows/sec**
+  * **Volume chart → bytes/sec**
+  * CPU → %
+  * Memory → bytes
+  * Threads → count
+
+No dictionaries are used — only arrays of integers.
+
+---
+
+## 🚀 Quick Start
+
+### 1️⃣ Using Docker (recommended)
+
+```
+cd test
+docker-compose up
+```
+
+Dashboard available at:
+
+```
+http://localhost:8080
+```
+
+---
+
+### 2️⃣ Local build
+
+```
 cd src
-
-go mod download
-go run .
+go build -o clickhouse-dash
+./clickhouse-dash
 ```
 
-Then open:
+---
 
-* UI: `http://127.0.0.1:8080/`
-* Health: `http://127.0.0.1:8080/healthz`
+## ⚙️ Configuration
 
-## Configuration
+Environment variables:
 
-All runtime configuration is read from environment variables.
+| Variable                      | Default        | Description        |
+| ----------------------------- | -------------- | ------------------ |
+| LISTEN_HOST                   | 127.0.0.1      | HTTP host          |
+| LISTEN_PORT                   | 8080           | HTTP port          |
+| CH_URL                        | 127.0.0.1:9000 | ClickHouse address |
+| CH_USER                       | default        | DB user            |
+| CH_PASS                       |                | DB password        |
+| CH_DATABASE                   | default        | Database           |
+| DEFAULT_MAX_EXECUTION_SECONDS | 60             | Query timeout      |
+| DEFAULT_MAX_RESULT_ROWS       | 10000          | Row limit          |
+| DEFAULT_MAX_RESULT_BYTES      | 10485760       | Byte limit         |
 
-### Server
+---
 
-| Variable      |     Default | Description                  |
-| ------------- | ----------: | ---------------------------- |
-| `LISTEN_HOST` | `127.0.0.1` | Host to bind the HTTP server |
-| `LISTEN_PORT` |      `8080` | Port to bind the HTTP server |
+## 🧠 Query Execution Model
 
-### ClickHouse connection
+* Query starts when SSE stream attaches
+* ClickHouse callbacks feed internal metrics
+* Telemetry sampling occurs every 10ms
+* SSE emits unified `tick` event every 250ms
+* Final `done` event closes stream
 
-| Variable          |          Default | Description                                                |
-| ----------------- | ---------------: | ---------------------------------------------------------- |
-| `CH_URL`          | `127.0.0.1:9000` | ClickHouse address or DSN (depending on your driver setup) |
-| `CH_USER`         |        `default` | ClickHouse username                                        |
-| `CH_PASS`         |        *(empty)* | ClickHouse password                                        |
-| `CH_DATABASE`     |        `default` | Default database for queries                               |
-| `CH_DIAL_TIMEOUT` |             `5s` | Dial timeout (Go duration, e.g. `250ms`, `5s`, `1m`)       |
+---
 
-### Admin credentials (optional, for `KILL QUERY` fallback)
+## 📂 Project Structure
 
-If not set, admin credentials default to `CH_USER` / `CH_PASS`.
+```
+.github/
+  .ressources/        → screenshots
+  workflows/          → GitHub release pipeline
 
-| Variable        |   Default | Description                                   |
-| --------------- | --------: | --------------------------------------------- |
-| `CH_ADMIN_USER` | `CH_USER` | Admin username used for control-plane actions |
-| `CH_ADMIN_PASS` | `CH_PASS` | Admin password used for control-plane actions |
+src/
+  server.go           → HTTP + SSE
+  query_session.go    → query lifecycle
+  metrics_calculation.go
+  clickhouse_connection_manager.go
+  static/
+    index.html
+    app.js
+    style.css
 
-### Default query limits / guardrails
-
-| Variable                        |                   Default | Description                                               |
-| ------------------------------- | ------------------------: | --------------------------------------------------------- |
-| `DEFAULT_MAX_EXECUTION_SECONDS` |                      `60` | ClickHouse `max_execution_time` (seconds)                 |
-| `DEFAULT_MAX_RESULT_ROWS`       |                   `10000` | ClickHouse `max_result_rows`                              |
-| `DEFAULT_MAX_RESULT_BYTES`      |                `10485760` | ClickHouse `max_result_bytes` (10 MiB)                    |
-| `DEFAULT_RESULT_PREVIEW_ROWS`   | `DEFAULT_MAX_RESULT_ROWS` | Server-side preview limit (UI streaming stops after this) |
-
-### Query session expiration
-
-| Variable                        | Default | Description                                                          |
-| ------------------------------- | ------: | -------------------------------------------------------------------- |
-| `SESSION_EXPIRE_IF_NOT_STARTED` |    `2m` | Expire query sessions if the client never attaches to the SSE stream |
-| `SESSION_EXPIRE_AFTER_FINISH`   |    `5m` | Expire sessions after completion                                     |
-
-### Example
-
-```bash
-export LISTEN_HOST=0.0.0.0
-export LISTEN_PORT=8080
-
-export CH_URL=clickhouse:9000
-export CH_USER=default
-export CH_PASS=
-export CH_DATABASE=default
-
-export DEFAULT_MAX_EXECUTION_SECONDS=30
-export DEFAULT_MAX_RESULT_ROWS=50000
-export DEFAULT_MAX_RESULT_BYTES=$((50*1024*1024))
-export DEFAULT_RESULT_PREVIEW_ROWS=20000
-
-cd src && go run .
+test/
+  docker-compose.yml
+  Dockerfile
 ```
 
-## API
+---
 
-### `POST /api/query`
+## 🧪 Tests
 
-Creates a new query session.
-
-**Request JSON**
-
-```json
-{
-  "sql": "SELECT 1",
-  "database": "optional_db",
-  "settings": {
-    "max_execution_time": 10
-  }
-}
+```
+go test ./...
 ```
 
-**Response JSON**
+Includes:
 
-```json
-{
-  "query_id": "…",
-  "stream_url": "/api/query/stream?query_id=…"
-}
+* SQL guard tests
+* Metrics calculation tests
+* Log parsing tests
+
+---
+
+## 📦 Release
+
+Automated via:
+
+```
+.github/workflows/release.yaml
 ```
 
-### `GET /api/query/stream?query_id=...`
+Uses `goreleaser`.
 
-SSE stream for a query session.
+---
 
-Event types you may receive:
+## 🎨 UI Notes
 
-* `meta`
-* `progress`
-* `resource`
-* `result_meta`
-* `result_rows`
-* `error`
-* `done`
-* `keepalive`
+* Inter variable font
+* Sparkline charts rendered via Canvas
+* Number formatting stabilized (no layout jitter)
+* Full history retained (downsampled only at render time)
 
-### `POST /api/query/cancel`
+---
 
-Requests cancellation of a running query.
+## 🛡 SQL Guard
 
-**Request JSON**
+`sql_guard.go` prevents unsafe patterns depending on configuration.
 
-```json
-{ "query_id": "…" }
-```
+---
 
-**Response JSON**
+## 📈 Performance
 
-```json
-{ "query_id": "…", "status": "cancel_requested" }
-```
+* ~10ms internal resolution
+* 4 network pushes per second
+* Decimation at render level
+* Memory capped per series
 
-## Notes on performance / “client is too slow”
+---
 
-Results are batched server-side and sent as `result_rows` events to avoid flooding the SSE channel and to protect memory usage when the browser cannot render fast enough.
+## 🔧 Future Improvements
 
-If the client still can’t keep up, the server may cancel the query to avoid unbounded buffering.
+* Query history
+* Query profiling breakdown
+* Multi-node cluster metrics
+* Slow query log overlay
+* Export CSV
+* Authentication layer
 
-## Releases
+---
 
-This repository is set up for tag-based releases (GitHub Actions + GoReleaser).
+## 📝 License
 
-Create and push a tag:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+MIT
