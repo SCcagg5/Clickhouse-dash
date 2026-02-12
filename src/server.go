@@ -305,27 +305,30 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		session.requestCancellation()
 	}()
 
-	// Publish cadence (stable window for "instant" rates).
+	// Publish cadence: 4 Hz SSE.
 	publishTicker := time.NewTicker(250 * time.Millisecond)
 	defer publishTicker.Stop()
 
 	keepAliveTicker := time.NewTicker(15 * time.Second)
 	defer keepAliveTicker.Stop()
 
-	// ---- metrics state (we only compute "instant" + "max") ----
+	// ---- metrics state (inst + max) ----
 	var (
-		prevSampleTime time.Time
+		prevPublishTime time.Time
+		prevReadRows    uint64
+		prevReadBytes   uint64
+		prevCPUSeconds  float64
 
-		prevReadRows  uint64
-		prevReadBytes uint64
-
-		prevCPUSeconds float64
-
-		cpuInstMaxPercent float64
-
-		threadPeakMax int
-
+		cpuInstMaxCenti int64
+		threadPeakMax   int
 		peakMemMaxBytes *int64
+
+		// For 10ms graph points packed inside each 250ms tick.
+		prevTickElapsedMs int64
+		prevSampleRB      int64
+		prevSampleCPU     int64
+		prevSampleMem     int64
+		prevSampleThr     int64
 	)
 
 	updateMaxPeakMem := func(v *int64) {
@@ -338,100 +341,183 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		}
 	}
 
-	// Build "resource" payload from a snapshot.
-	buildResourcePayload := func(now time.Time, snap querySessionSnapshot) map[string]any {
-		// CPU seconds come from ClickHouse profile events (server-side), not API host.
+	clampInt64 := func(v int64) int64 {
+		if v < 0 {
+			return 0
+		}
+		return v
+	}
+
+	roundFloatToInt64 := func(v float64) int64 {
+		if v != v || v > 9e18 || v < -9e18 {
+			return 0
+		}
+		if v >= 0 {
+			return int64(v + 0.5)
+		}
+		return int64(v - 0.5)
+	}
+
+	// Build the *single* tick payload as an ARRAY (no dict), with packed samples.
+	buildTickPayload := func(now time.Time, snap querySessionSnapshot) []any {
+		elapsedSeconds := 0.0
+		if !snap.startedTime.IsZero() {
+			elapsedSeconds = now.Sub(snap.startedTime).Seconds()
+		}
+		elapsedMs := int64(elapsedSeconds * 1000.0)
+
+		// progress
+		percent, known := calculateProgressPercent(0, snap.readBytesTotal, snap.totalRowsToRead, snap.readRowsTotal)
+		percentCenti := int64(-1)
+		knownInt := int64(0)
+		if known {
+			knownInt = 1
+			percentCenti = roundFloatToInt64(percent * 100.0)
+		}
+
+		// resource inst/max
 		cpuSeconds := float64(snap.userTimeMicrosecondsTotal+snap.systemTimeMicrosecondsTotal) / 1e6
 
-		// Estimate threads from "thread last seen" map.
 		threadCountCurrent, threadCountPeak := estimateThreadCounts(now, snap.threadLastSeenByIdentifier, 2*time.Second, snap.threadPeakCount)
 		if threadCountPeak > threadPeakMax {
 			threadPeakMax = threadCountPeak
 		}
 
-		// Memory: best effort from profile events + logs parsing (peak).
 		updateMaxPeakMem(snap.peakMemoryBytes)
 
-		// Instant rates (stable window = publishTicker interval)
 		rowsPerSecondInst := 0.0
 		bytesPerSecondInst := 0.0
 		cpuInstPercent := 0.0
-
-		if !prevSampleTime.IsZero() {
-			dt := now.Sub(prevSampleTime).Seconds()
+		if !prevPublishTime.IsZero() {
+			dt := now.Sub(prevPublishTime).Seconds()
 			if dt > 0 {
 				rowsPerSecondInst = float64(snap.readRowsTotal-prevReadRows) / dt
 				bytesPerSecondInst = float64(snap.readBytesTotal-prevReadBytes) / dt
-
 				cpuDelta := cpuSeconds - prevCPUSeconds
 				if cpuDelta < 0 {
 					cpuDelta = 0
 				}
 				cpuInstPercent = (cpuDelta / dt) * 100.0
-				if cpuInstPercent > cpuInstMaxPercent {
-					cpuInstMaxPercent = cpuInstPercent
-				}
 			}
 		}
 
-		prevSampleTime = now
+		cpuCenti := roundFloatToInt64(cpuInstPercent * 100.0)
+		if cpuCenti > cpuInstMaxCenti {
+			cpuInstMaxCenti = cpuCenti
+		}
+
+		prevPublishTime = now
 		prevReadRows = snap.readRowsTotal
 		prevReadBytes = snap.readBytesTotal
 		prevCPUSeconds = cpuSeconds
 
-		payload := map[string]any{
-			"query_id": queryIdentifier,
-
-			// Inst + Max only (simple UI)
-			"rows_per_second_inst":  rowsPerSecondInst,
-			"bytes_per_second_inst": bytesPerSecondInst,
-
-			"cpu_percent_inst":     cpuInstPercent,
-			"cpu_percent_inst_max": cpuInstMaxPercent,
-
-			"thread_count_inst":     threadCountCurrent,
-			"thread_count_inst_max": threadPeakMax,
-		}
-
+		memInst := int64(-1)
 		if snap.currentMemoryBytes != nil {
-			payload["memory_bytes_inst"] = *snap.currentMemoryBytes
-		} else {
-			payload["memory_bytes_inst"] = nil
+			memInst = *snap.currentMemoryBytes
 		}
-
+		memMax := int64(-1)
 		if peakMemMaxBytes != nil {
-			payload["memory_bytes_inst_max"] = *peakMemMaxBytes
-		} else {
-			payload["memory_bytes_inst_max"] = nil
+			memMax = *peakMemMaxBytes
 		}
 
-		return payload
-	}
+		rowsPerSecInt := roundFloatToInt64(rowsPerSecondInst)
+		bytesPerSecInt := roundFloatToInt64(bytesPerSecondInst)
 
-	// ---- progress payload ----
-	buildProgressPayload := func(now time.Time, snap querySessionSnapshot) map[string]any {
-		elapsedSeconds := 0.0
-		if !snap.startedTime.IsZero() {
-			elapsedSeconds = now.Sub(snap.startedTime).Seconds()
+		thrInst := int64(threadCountCurrent)
+		thrMax := int64(threadPeakMax)
+
+		// ---- packed samples every 10ms INSIDE the 250ms tick ----
+		// We don't get real 10ms callbacks from CH; we generate intermediate points by interpolation
+		// between the previous tick and this tick.
+		samples := make([][]int64, 0, 32)
+		if prevTickElapsedMs > 0 && elapsedMs > prevTickElapsedMs {
+			step := int64(10)
+			dtMs := elapsedMs - prevTickElapsedMs
+			count := int(dtMs / step)
+			if count > 0 {
+				// cap to avoid huge bursts if the client pauses
+				if count > 5000 {
+					count = 5000
+					step = dtMs / int64(count)
+					if step <= 0 {
+						step = 10
+					}
+				}
+
+				// current sample values (end of interval)
+				curRB := int64(snap.readBytesTotal)
+				curCPU := cpuCenti
+				curMem := memInst
+				curThr := thrInst
+
+				den := float64(elapsedMs - prevTickElapsedMs)
+				if den <= 0 {
+					den = 1
+				}
+
+				for i := 1; i <= count; i++ {
+					tt := prevTickElapsedMs + int64(i)*step
+					if tt > elapsedMs {
+						break
+					}
+					ratio := float64(tt-prevTickElapsedMs) / den
+					lerp := func(a, b int64) int64 {
+						return a + roundFloatToInt64(float64(b-a)*ratio)
+					}
+
+					rb := clampInt64(lerp(prevSampleRB, curRB))
+					cpu := lerp(prevSampleCPU, curCPU)
+					mem := lerp(prevSampleMem, curMem)
+					thr := lerp(prevSampleThr, curThr)
+
+					samples = append(samples, []int64{tt, rb, cpu, mem, thr})
+				}
+
+				// advance prev sample anchors
+				prevSampleRB = curRB
+				prevSampleCPU = curCPU
+				prevSampleMem = curMem
+				prevSampleThr = curThr
+			}
+		} else if prevTickElapsedMs == 0 {
+			// initialize anchors on the first tick
+			prevSampleRB = int64(snap.readBytesTotal)
+			prevSampleCPU = cpuCenti
+			prevSampleMem = memInst
+			prevSampleThr = thrInst
+		}
+		prevTickElapsedMs = elapsedMs
+
+		// Convert samples to []any for JSON
+		var samplesAny any = nil
+		if len(samples) > 0 {
+			out := make([][]int64, 0, len(samples))
+			for _, s := range samples {
+				out = append(out, s)
+			}
+			samplesAny = out
 		}
 
-		percent, known := calculateProgressPercent(
-			0,
-			snap.readBytesTotal,
-			snap.totalRowsToRead,
-			snap.readRowsTotal,
-		)
-
-		return map[string]any{
-			"query_id":        queryIdentifier,
-			"elapsed_seconds": elapsedSeconds,
-
-			"percent":       percent,
-			"percent_known": known,
-
-			"read_rows":          snap.readRowsTotal,
-			"read_bytes":         snap.readBytesTotal,
-			"total_rows_to_read": snap.totalRowsToRead,
+		// tick array layout:
+		// [
+		//   0 t_ms,
+		//   1 percent_centi_or_-1, 2 percent_known(0/1),
+		//   3 read_rows, 4 read_bytes, 5 total_rows_to_read,
+		//   6 rows_per_s, 7 bytes_per_s,
+		//   8 cpu_centi, 9 cpu_max_centi,
+		//   10 mem_bytes_or_-1, 11 mem_max_bytes_or_-1,
+		//   12 threads, 13 threads_max,
+		//   14 samples([[t_ms, rb, cpu_centi, mem_or_-1, thr],...]) or null
+		// ]
+		return []any{
+			elapsedMs,
+			percentCenti, knownInt,
+			int64(snap.readRowsTotal), int64(snap.readBytesTotal), int64(snap.totalRowsToRead),
+			rowsPerSecInt, bytesPerSecInt,
+			cpuCenti, cpuInstMaxCenti,
+			memInst, memMax,
+			thrInst, thrMax,
+			samplesAny,
 		}
 	}
 
@@ -448,22 +534,10 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		}
 	}
 
-	drainNonCriticalChannel := func() {
-		for {
-			select {
-			case msg := <-session.nonCriticalEventChannel:
-				_ = writeServerSentEvent(httpResponseWriter, flusher, msg.eventName, msg.payload)
-			default:
-				return
-			}
-		}
-	}
-
 	// Initial publish.
 	now := time.Now()
 	snap := session.snapshot(now)
-	_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", buildProgressPayload(now, snap))
-	_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", buildResourcePayload(now, snap))
+	_ = writeServerSentEvent(httpResponseWriter, flusher, "tick", buildTickPayload(now, snap))
 
 	for {
 		select {
@@ -474,33 +548,11 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 			if criticalMessage.eventName == "done" {
 				// Drain any buffered result events first.
 				drainResultChannel()
-				drainNonCriticalChannel()
 
-				// Final metrics snapshot (after query end).
+				// Final tick snapshot (after query end).
 				finalNow := time.Now()
 				finalSnap := session.snapshot(finalNow)
-
-				_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", buildProgressPayload(finalNow, finalSnap))
-				_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", buildResourcePayload(finalNow, finalSnap))
-
-				// OPTIONAL: emit zeros so UI can reset immediately without logic.
-				_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", map[string]any{
-					"query_id":              queryIdentifier,
-					"rows_per_second_inst":  0,
-					"bytes_per_second_inst": 0,
-					"cpu_percent_inst":      0,
-					"cpu_percent_inst_max":  cpuInstMaxPercent,
-					"thread_count_inst":     0,
-					"thread_count_inst_max": threadPeakMax,
-					"memory_bytes_inst":     0,
-					"memory_bytes_inst_max": func() any {
-						if peakMemMaxBytes == nil {
-							return nil
-						}
-						return *peakMemMaxBytes
-					}(),
-				})
-
+				_ = writeServerSentEvent(httpResponseWriter, flusher, "tick", buildTickPayload(finalNow, finalSnap))
 				_ = writeServerSentEvent(httpResponseWriter, flusher, "done", criticalMessage.payload)
 				return
 			}
@@ -510,9 +562,7 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		case <-publishTicker.C:
 			t := time.Now()
 			s := session.snapshot(t)
-
-			_ = writeServerSentEvent(httpResponseWriter, flusher, "progress", buildProgressPayload(t, s))
-			_ = writeServerSentEvent(httpResponseWriter, flusher, "resource", buildResourcePayload(t, s))
+			_ = writeServerSentEvent(httpResponseWriter, flusher, "tick", buildTickPayload(t, s))
 
 		case <-keepAliveTicker.C:
 			_ = writeServerSentEvent(httpResponseWriter, flusher, "keepalive", map[string]any{
@@ -524,8 +574,8 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 			session.requestCancellation()
 			return
 
-		case nonCriticalMessage := <-session.nonCriticalEventChannel:
-			_ = writeServerSentEvent(httpResponseWriter, flusher, nonCriticalMessage.eventName, nonCriticalMessage.payload)
+		case <-session.nonCriticalEventChannel:
+			// no-op
 		}
 	}
 }

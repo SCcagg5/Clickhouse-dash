@@ -60,13 +60,23 @@
         </div>
 
         <div class="metricCompact">
-          <canvas id="readChart" class="metricCompact__bgChart" aria-label="Read progression"></canvas>
+          <canvas id="readRowsChart" class="metricCompact__bgChart" aria-label="Read rows per second"></canvas>
           <div class="metricCompact__content">
-            <div class="metricCompact__label">Read</div>
-            <div class="metricCompact__value" id="readCountersText">-</div>
-            <div class="metricCompact__sub" id="readRateText">-</div>
+            <div class="metricCompact__label">Read rows</div>
+            <div class="metricCompact__value" id="readRowsRateText">-</div>
+            <div class="metricCompact__sub" id="readRowsTotalText">-</div>
           </div>
         </div>
+
+        <div class="metricCompact">
+          <canvas id="readBytesChart" class="metricCompact__bgChart" aria-label="Read bytes per second"></canvas>
+          <div class="metricCompact__content">
+            <div class="metricCompact__label">Read volume</div>
+            <div class="metricCompact__value" id="readBytesRateText">-</div>
+            <div class="metricCompact__sub" id="readBytesTotalText">-</div>
+          </div>
+        </div>
+
 
         <div class="metricCompact">
           <canvas id="cpuChart" class="metricCompact__bgChart" aria-label="CPU progression"></canvas>
@@ -103,6 +113,10 @@
         <div class="panel__title">Results</div>
         <div class="panel__meta">
           <span class="metaItem" id="resultColumnsText">-</span>
+          <button id="copyJsonButton" class="button button--small" type="button" disabled>
+            Copy JSON
+          </button>
+          <span id="copyJsonToast" class="copyToast" hidden>Copied</span>
         </div>
       </div>
 

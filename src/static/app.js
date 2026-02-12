@@ -1,9 +1,6 @@
 (() => {
   "use strict";
 
-  // ----------------------------
-  // DOM
-  // ----------------------------
   const queryTextAreaElement = document.getElementById("queryTextArea");
   const runButtonElement = document.getElementById("runButton");
   const cancelButtonElement = document.getElementById("cancelButton");
@@ -18,13 +15,22 @@
   const elapsedSecondsTextElement = document.getElementById("elapsedSecondsText");
   const progressPercentTextElement = document.getElementById("progressPercentText");
 
-  // Support 2 variantes: progressCard (bg) OU progressBar (fill)
   const progressCardElement = document.getElementById("progressCard");
   const progressBarElement = document.getElementById("progressBar");
   const progressBarFillElement = document.getElementById("progressBarFill");
 
-  const readCountersTextElement = document.getElementById("readCountersText");
-  const readRateTextElement = document.getElementById("readRateText");
+  const readRowsRateTextElement = document.getElementById("readRowsRateText");
+  const readRowsTotalTextElement = document.getElementById("readRowsTotalText");
+
+  const readBytesRateTextElement = document.getElementById("readBytesRateText");
+  const readBytesTotalTextElement = document.getElementById("readBytesTotalText");
+
+  const readRowsChartCanvas = document.getElementById("readRowsChart");
+  const readBytesChartCanvas = document.getElementById("readBytesChart");
+
+  const copyJsonButtonElement = document.getElementById("copyJsonButton");
+  const copyJsonToastElement = document.getElementById("copyJsonToast");
+
 
   const cpuTextElement = document.getElementById("cpuText");
   const cpuMaxTextElement = document.getElementById("cpuMaxText");
@@ -36,16 +42,15 @@
   const resultTableHeadElement = document.getElementById("resultTableHead");
   const resultTableBodyElement = document.getElementById("resultTableBody");
 
-  const readChartCanvas = document.getElementById("readChart");
+  
   const cpuChartCanvas = document.getElementById("cpuChart");
   const memoryChartCanvas = document.getElementById("memoryChart");
   const threadChartCanvas = document.getElementById("threadChart");
 
   const THEME_STORAGE_KEY = "chdash.theme";
 
-  // ----------------------------
-  // Helpers
-  // ----------------------------
+
+
   function setText(el, value) {
     if (el) el.textContent = value;
   }
@@ -62,6 +67,188 @@
       return null;
     }
   }
+
+  async function copyTextToClipboard(text) {
+    const value = String(text ?? "");
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const ta = document.createElement("textarea");
+    ta.value = value;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.left = "-1000px";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  }
+
+  function flashCopyUi() {
+    if (copyJsonToastElement) {
+      copyJsonToastElement.hidden = false;
+      setTimeout(() => { copyJsonToastElement.hidden = true; }, 1200);
+    }
+    if (copyJsonButtonElement) {
+      const prev = copyJsonButtonElement.textContent;
+      copyJsonButtonElement.textContent = "Copied";
+      setTimeout(() => { copyJsonButtonElement.textContent = prev; }, 1200);
+    }
+  }
+
+  function updateCopyButtonState() {
+    if (!copyJsonButtonElement) return;
+
+    const err = String(lastErrorMessage || "").trim();
+    const hasError = err.length > 0;
+
+    const hasRows = Array.isArray(allResultRows) && allResultRows.length > 0;
+
+    const st = String(currentStatusValue || "").toLowerCase();
+    const finishedLike = ["finished", "done", "error", "canceled", "cancelled"].includes(st);
+
+    copyJsonButtonElement.disabled = !(hasError || hasRows || finishedLike);
+  }
+
+  const NUMERIC_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+  function coerceNumberLike(v) {
+    if (typeof v !== "string") return v;
+
+    const s = v.trim();
+    if (!s) return v;
+
+    if (!NUMERIC_RE.test(s)) return v;
+
+    const n = Number(s);
+    if (!Number.isFinite(n)) return v;
+
+    // If it's an integer, keep string when > MAX_SAFE_INTEGER
+    const isIntegerLike = /^[+-]?\d+$/.test(s);
+    if (isIntegerLike) {
+      // BigInt parse can throw on huge or weird strings, so guard
+      try {
+        const bi = BigInt(s);
+        const abs = bi < 0n ? -bi : bi;
+        if (abs > BigInt(Number.MAX_SAFE_INTEGER)) return v; // keep as string
+      } catch {
+        return v;
+      }
+    }
+
+    return n;
+  }
+
+  function coerceDeep(v) {
+    if (Array.isArray(v)) return v.map(coerceDeep);
+    if (v && typeof v === "object") {
+      const out = {};
+      for (const [k, val] of Object.entries(v)) out[k] = coerceDeep(val);
+      return out;
+    }
+    return coerceNumberLike(v);
+  }
+
+
+  function rowToObject(row) {
+    const obj = {};
+    for (let i = 0; i < resultColumns.length; i++) {
+      const key = String(resultColumns[i] ?? "");
+      const rawVal = Array.isArray(row) ? row[i] : (i === 0 ? row : null);
+      obj[key] = coerceDeep(rawVal);
+    }
+    return obj;
+  }
+
+  function buildCopyContent() {
+    const statusLower = String(currentStatusValue || "").toLowerCase();
+    const err = String(lastErrorMessage || "").trim();
+
+    if (err && statusLower === "error") {
+      return {
+        mode: "value",
+        value: err,
+      };
+    }
+
+    if (Array.isArray(allResultRows) && allResultRows.length > 0) {
+      const rowCount = allResultRows.length;
+      const colCount = Array.isArray(resultColumns) ? resultColumns.length : 0;
+
+      if (colCount === 0) {
+        if (rowCount === 1) {
+          const only = allResultRows[0];
+          if (Array.isArray(only) && only.length === 1) return { mode: "value", value: only[0] };
+          return { mode: "json", value: only };
+        }
+        return { mode: "json", value: allResultRows };
+      }
+
+      if (rowCount === 1) {
+        const row = allResultRows[0];
+
+        if (colCount === 1) {
+          const v = Array.isArray(row) ? row[0] : row;
+          return { mode: "value", value: coerceDeep(v) };
+        }
+
+        return { mode: "json", value: rowToObject(row) };
+      }
+
+      if (colCount === 1) {
+        const arr = allResultRows.map(r => coerceDeep(Array.isArray(r) ? r[0] : r));
+        return { mode: "json", value: arr };
+      }
+
+      return { mode: "json", value: allResultRows.map(rowToObject) };
+    }
+
+    if (lastDonePayload) {
+      const out = {
+        status: lastDonePayload.status ?? currentStatusValue ?? "finished",
+        query_id: activeQueryIdentifier ?? lastDonePayload.query_id ?? null,
+        elapsed_seconds: lastDonePayload.elapsed_seconds ?? latestElapsedSeconds ?? null,
+      };
+      if (lastDonePayload.message) out.message = lastDonePayload.message;
+      return { mode: "json", value: out };
+    }
+
+    if (err) {
+      return {
+        mode: "json",
+        value: {
+          status: currentStatusValue || "unknown",
+          query_id: activeQueryIdentifier ?? null,
+          message: err,
+        },
+      };
+    }
+
+    return {
+      mode: "json",
+      value: {
+        status: currentStatusValue || "idle",
+        query_id: activeQueryIdentifier ?? null,
+      },
+    };
+  }
+
+  async function handleCopyJson() {
+    try {
+      const built = buildCopyContent();
+      const text = built.mode === "value"
+        ? String(built.value ?? "")
+        : JSON.stringify(built.value, null, 2);
+
+      await copyTextToClipboard(text);
+      flashCopyUi();
+    } catch (e) {
+      setError(e && e.message ? e.message : String(e));
+    }
+  }
+
 
   function formatCompactNumber(value) {
     if (value === null || value === undefined) return "-";
@@ -116,9 +303,6 @@
     return v && v.trim() ? v.trim() : fallback;
   }
 
-  // ----------------------------
-  // Theme
-  // ----------------------------
   function applyTheme(mode) {
     const root = document.documentElement;
     if (mode === "light" || mode === "dark") root.setAttribute("data-theme", mode);
@@ -158,11 +342,7 @@
     });
   }
 
-  // ----------------------------
-  // Progress visual (bar ou card)
-  // ----------------------------
   function setProgressVisual(percentKnown, percent) {
-    // progressCard (CSS var --p)
     if (progressCardElement) {
       if (!percentKnown) {
         progressCardElement.classList.add("is-indeterminate");
@@ -174,7 +354,6 @@
       }
     }
 
-    // progressBar (fill width)
     if (progressBarElement && progressBarFillElement) {
       if (!percentKnown) {
         progressBarElement.classList.add("progressBar--indeterminate");
@@ -187,20 +366,18 @@
     }
   }
 
-  // ----------------------------
-  // Charts (sparkline)
-  // ----------------------------
   const series = {
-    readBytes: [],
+    readRowsPerSec: [],
+    readBytesPerSec: [],
     cpu: [],
     memBytes: [],
     threads: [],
   };
 
-  const MAX_POINTS = 240;
-  const EPS_T = 1e-6;
 
-  // Push monotone: garantit une série triée par t
+  const MAX_STORE_POINTS = 120000;
+  const EPS_T = 1e-9;
+
   function pushPointMonotone(arr, t, v) {
     if (!Number.isFinite(t) || !Number.isFinite(v)) return;
     const n = arr.length;
@@ -209,17 +386,17 @@
       return;
     }
     const last = arr[n - 1];
-    if (t < last.t - EPS_T) {
-      // On refuse les retours arrière (cause principale des graph “bizarres”)
-      return;
-    }
+    if (t < last.t - EPS_T) return;
+
     if (Math.abs(t - last.t) <= EPS_T) {
-      // même timestamp → on remplace la valeur (dédup propre)
       last.v = v;
       return;
     }
     arr.push({ t, v });
-    if (arr.length > MAX_POINTS) arr.splice(0, arr.length - MAX_POINTS);
+
+    if (arr.length > MAX_STORE_POINTS) {
+      arr.splice(0, arr.length - MAX_STORE_POINTS);
+    }
   }
 
   function prepareCanvas(canvas) {
@@ -249,7 +426,6 @@
   }
 
   function computeAutoMax(points, opts) {
-    // opts.autoMaxQuantile ex: 0.98 → ignore les spikes extrêmes (CPU 1073%...)
     const q = opts.autoMaxQuantile;
     if (!q || !Array.isArray(points) || points.length < 2) return null;
     const vals = [];
@@ -260,6 +436,15 @@
     return qv * (opts.autoMaxPadFactor ?? 1.10);
   }
 
+  function decimate(points, maxPoints) {
+    if (!Array.isArray(points) || points.length <= maxPoints) return points;
+    const step = Math.ceil(points.length / maxPoints);
+    const out = [];
+    for (let i = 0; i < points.length; i += step) out.push(points[i]);
+    if (out[out.length - 1] !== points[points.length - 1]) out.push(points[points.length - 1]);
+    return out;
+  }
+
   function drawSparkline(canvas, points, opts = {}) {
     const prepared = prepareCanvas(canvas);
     if (!prepared) return;
@@ -268,7 +453,7 @@
     ctx.clearRect(0, 0, w, h);
 
     const pad = Math.round(h * 0.10);
-    const topReserved = Math.round(h * 0.46); // garde la zone texte tranquille
+    const topReserved = Math.round(h * 0.46);
     const x0 = pad;
     const y0 = topReserved;
     const x1 = w - pad;
@@ -282,31 +467,29 @@
 
     if (!Array.isArray(points) || points.length < 2) return;
 
-    // points sont monotones (grâce à pushPointMonotone)
-    const tMin = points[0].t;
-    const tMax = points[points.length - 1].t;
-    const tSpan = Math.max(1e-6, tMax - tMin);
+    const drawable = decimate(points, Math.max(80, Math.floor(w * 1.2)));
+
+    const tMin = drawable[0].t;
+    const tMax = drawable[drawable.length - 1].t;
+    const tSpan = Math.max(1e-12, tMax - tMin);
 
     const vMin = opts.min ?? 0;
 
-    // Max: soit fixe (opts.max), soit auto (quantile), soit max brut
     let vMax = null;
-
     if (opts.max != null && Number.isFinite(opts.max)) {
       vMax = opts.max;
     } else {
-      const auto = computeAutoMax(points, opts);
+      const auto = computeAutoMax(drawable, opts);
       if (auto != null && Number.isFinite(auto)) vMax = auto;
       else {
         let m = -Infinity;
-        for (const p of points) if (Number.isFinite(p.v)) m = Math.max(m, p.v);
+        for (const p of drawable) if (Number.isFinite(p.v)) m = Math.max(m, p.v);
         vMax = Number.isFinite(m) ? m : (vMin + 1);
       }
     }
 
-    const minMax = opts.minMax ?? null; // ex: CPU au moins 100
+    const minMax = opts.minMax ?? null;
     if (minMax != null && Number.isFinite(minMax)) vMax = Math.max(vMax, minMax);
-
     if (!Number.isFinite(vMax) || vMax <= vMin) vMax = vMin + 1;
 
     const line = opts.lineColor || getCssVar("--accentBorder", "#2563eb");
@@ -318,20 +501,18 @@
       return y1 - ((vv - vMin) / (vMax - vMin)) * (y1 - y0);
     }
 
-    // area fill
     ctx.beginPath();
-    ctx.moveTo(X(points[0].t), y1);
-    for (const p of points) ctx.lineTo(X(p.t), Y(p.v));
-    ctx.lineTo(X(points[points.length - 1].t), y1);
+    ctx.moveTo(X(drawable[0].t), y1);
+    for (const p of drawable) ctx.lineTo(X(p.t), Y(p.v));
+    ctx.lineTo(X(drawable[drawable.length - 1].t), y1);
     ctx.closePath();
     ctx.globalAlpha = fillAlpha;
     ctx.fillStyle = line;
     ctx.fill();
 
-    // line
     ctx.beginPath();
-    ctx.moveTo(X(points[0].t), Y(points[0].v));
-    for (let i = 1; i < points.length; i++) ctx.lineTo(X(points[i].t), Y(points[i].v));
+    ctx.moveTo(X(drawable[0].t), Y(drawable[0].v));
+    for (let i = 1; i < drawable.length; i++) ctx.lineTo(X(drawable[i].t), Y(drawable[i].v));
     ctx.globalAlpha = 0.90;
     ctx.strokeStyle = line;
     ctx.lineWidth = 2;
@@ -339,7 +520,6 @@
     ctx.lineCap = "round";
     ctx.stroke();
 
-    // glow soft
     ctx.globalAlpha = 0.16;
     ctx.lineWidth = 6;
     ctx.stroke();
@@ -356,12 +536,13 @@
   }
 
   function renderCharts() {
-    drawSparkline(readChartCanvas, series.readBytes, { min: 0 });
+    drawSparkline(readRowsChartCanvas, series.readRowsPerSec, { min: 0 });
+    drawSparkline(readBytesChartCanvas, series.readBytesPerSec, { min: 0 });
 
-    // CPU: ignore spikes extrêmes (quantile) + clamp visuel
+
     drawSparkline(cpuChartCanvas, series.cpu, {
       min: 0,
-      autoMaxQuantile: 0.98, // évite de scaler sur un spike isolé (ex: 1073%)
+      autoMaxQuantile: 0.98,
       autoMaxPadFactor: 1.10,
       minMax: 100,
       clampMax: true,
@@ -375,26 +556,32 @@
   const themeObserver = new MutationObserver(() => scheduleChartsRender());
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
-  // ----------------------------
-  // Query state
-  // ----------------------------
   let activeQueryIdentifier = null;
   let activeEventSource = null;
 
   let resultColumns = [];
   let pendingRows = [];
+  let allResultRows = [];
+  let lastDonePayload = null;
+  let currentStatusValue = "idle";
+  let lastErrorMessage = "";
   let scheduledFlush = false;
   const flushBatchSize = 400;
 
-  // Synchronisation temps:
-  // resource events n'ont parfois pas elapsed_seconds → on réutilise le dernier elapsed connu
   let latestElapsedSeconds = 0;
 
-  // Samples mode
   let hasSamplesStream = false;
   let lastSampleT = -Infinity;
 
-  // Pour éviter le flash final à 0 (resource frame)
+  let lastEstimatedReadRows = null;
+  let lastEstimatedReadRowsT = null;
+  let lastSampleReadBytes = null;
+  let lastSampleReadBytesT = null;
+
+
+  let prevTickT = null;
+  let prevTickReadRows = null;
+
   let hasNonZeroResourceFrame = false;
 
   function closeActiveStream() {
@@ -405,7 +592,9 @@
   }
 
   function setStatus(text) {
+    currentStatusValue = text;
     setText(queryStatusTextElement, text);
+    updateCopyButtonState();
   }
 
   function setQueryIdentifier(text) {
@@ -413,24 +602,38 @@
   }
 
   function setError(message) {
+    lastErrorMessage = message || "";
     if (!errorBannerElement) return;
     if (!message) {
       errorBannerElement.hidden = true;
       errorBannerElement.textContent = "";
+      updateCopyButtonState();
       return;
     }
     errorBannerElement.hidden = false;
     errorBannerElement.textContent = message;
+    updateCopyButtonState();
   }
 
+
   function clearCharts() {
-    series.readBytes.length = 0;
+    series.readBytesPerSec.length = 0;
+    series.readRowsPerSec.length = 0;
     series.cpu.length = 0;
     series.memBytes.length = 0;
     series.threads.length = 0;
 
     hasSamplesStream = false;
     lastSampleT = -Infinity;
+    lastEstimatedReadRows = null;
+    lastEstimatedReadRowsT = null;
+    lastSampleReadBytes = null;
+    lastSampleReadBytesT = null;
+
+
+    prevTickT = null;
+    prevTickReadRows = null;
+
     hasNonZeroResourceFrame = false;
 
     setProgressVisual(true, 0);
@@ -440,8 +643,10 @@
   function clearMetrics() {
     setText(elapsedSecondsTextElement, "-");
     setText(progressPercentTextElement, "-");
-    setText(readCountersTextElement, "-");
-    setText(readRateTextElement, "-");
+    setText(readRowsRateTextElement, "-");
+    setText(readRowsTotalTextElement, "-");
+    setText(readBytesRateTextElement, "-");
+    setText(readBytesTotalTextElement, "-");
 
     setText(cpuTextElement, "-");
     setText(cpuMaxTextElement, "-");
@@ -452,12 +657,17 @@
 
     setError("");
     clearCharts();
+
+    latestElapsedSeconds = 0;
   }
 
   function clearResults() {
     resultColumns = [];
     pendingRows = [];
     scheduledFlush = false;
+    allResultRows = [];
+    updateCopyButtonState();
+
 
     if (resultTableHeadElement) resultTableHeadElement.innerHTML = "";
     if (resultTableBodyElement) resultTableBodyElement.innerHTML = "";
@@ -522,9 +732,6 @@
     if (pendingRows.length > 0) scheduleFlush();
   }
 
-  // ----------------------------
-  // Backend calls
-  // ----------------------------
   async function createQuery(queryText) {
     const response = await fetch("/api/query", {
       method: "POST",
@@ -559,124 +766,272 @@
     return responseBody;
   }
 
-  // ----------------------------
-  // SSE payload handling
-  // ----------------------------
-  function appendSamples(samples) {
-    if (!Array.isArray(samples) || samples.length === 0) return;
+  function normalizeTick(raw) {
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      return { kind: "object", v: raw };
+    }
 
-    // IMPORTANT: trier par elapsed_seconds pour rester monotone
-    const sorted = samples
-      .map(s => ({ s, t: asFiniteNumber(s.elapsed_seconds) }))
+    if (!Array.isArray(raw)) return null;
+
+    const tMs = asFiniteNumber(raw[0]) ?? 0;
+    const tSec = tMs / 1000.0;
+
+    const percent = asFiniteNumber(raw[1]);
+    const percentKnown = !!raw[2];
+
+    const readRows = asFiniteNumber(raw[3]);
+    const readBytes = asFiniteNumber(raw[4]);
+    const totalRows = asFiniteNumber(raw[5]);
+
+    const rowsPerSec = asFiniteNumber(raw[6]);
+    const bytesPerSec = asFiniteNumber(raw[7]);
+
+    const cpuInst = (asFiniteNumber(raw[8]) ?? 0) / 100.0;
+    const cpuMax = raw[9] == null ? null : (asFiniteNumber(raw[9]) / 100.0);
+
+    const memInst = raw[10] == null ? null : asFiniteNumber(raw[10]);
+    const memMax = raw[11] == null ? null : asFiniteNumber(raw[11]);
+
+    const thrInst = asFiniteNumber(raw[12]);
+    const thrMax = asFiniteNumber(raw[13]);
+
+    const samples = Array.isArray(raw[14]) ? raw[14] : null;
+
+    return {
+      kind: "array",
+      tSec,
+      percent,
+      percentKnown,
+      readRows,
+      readBytes,
+      totalRows,
+      rowsPerSec,
+      bytesPerSec,
+      cpuInst,
+      cpuMax,
+      memInst,
+      memMax,
+      thrInst,
+      thrMax,
+      samples,
+    };
+  }
+
+  function updateProgressFromParts(tSec, percent, percentKnown, readRows, readBytes, totalRows) {
+    latestElapsedSeconds = Math.max(latestElapsedSeconds, tSec);
+
+    setText(elapsedSecondsTextElement, formatSeconds(tSec));
+    percent = percent / 100;
+    if (percentKnown) {
+      setText(progressPercentTextElement, `${formatNumber(percent)} %`);
+      setProgressVisual(true, percent);
+    } else {
+      setText(progressPercentTextElement, "-");
+      setProgressVisual(false, 0);
+    }
+
+    setText(readRowsTotalTextElement, `${formatCompactNumber(readRows)} rows`);
+    setText(readBytesTotalTextElement, `${formatBytes(readBytes)}`);
+  }
+
+  function updateResourceFromParts(rowsPerSec, bytesPerSec, cpuInst, cpuMax, memInst, memMax, thrInst, thrMax) {
+    const rps = asFiniteNumber(rowsPerSec) ?? 0;
+    const bps = asFiniteNumber(bytesPerSec) ?? 0;
+
+    const cpu = asFiniteNumber(cpuInst) ?? 0;
+    const cpuM = cpuMax == null ? null : asFiniteNumber(cpuMax);
+
+    const mem = memInst == null ? null : asFiniteNumber(memInst);
+    const memM = memMax == null ? null : asFiniteNumber(memMax);
+
+    const th = asFiniteNumber(thrInst) ?? 0;
+    const thM = thrMax == null ? null : asFiniteNumber(thrMax);
+
+    const zeroFrame =
+      rps === 0 &&
+      bps === 0 &&
+      cpu === 0 &&
+      th === 0 &&
+      (mem === null || mem === 0);
+
+    if (zeroFrame && hasNonZeroResourceFrame) return;
+    if (!zeroFrame) hasNonZeroResourceFrame = true;
+
+    setText(readRowsRateTextElement, `${formatCompactNumber(rps)} rows/s`);
+    setText(readBytesRateTextElement, `${formatBytes(bps)}/s`);
+
+    setText(cpuTextElement, `${formatNumber(cpu)}%`);
+    setText(cpuMaxTextElement, `max: ${cpuM == null ? "-" : formatNumber(cpuM)}%`);
+
+    setText(memoryTextElement, mem === null ? "-" : formatBytes(mem));
+    setText(memoryMaxTextElement, `max: ${memM === null ? "-" : formatBytes(memM)}`);
+
+    setText(threadTextElement, `${formatNumber(th)}`);
+    setText(threadMaxTextElement, `max: ${thM == null ? "-" : formatNumber(thM)}`);
+  }
+
+  function appendSamplesAndDeriveRates(samplesPacked, tickT, tickReadRows) {
+    if (!Array.isArray(samplesPacked) || samplesPacked.length === 0) return;
+
+    const canInterpolateRows =
+      Number.isFinite(prevTickT) &&
+      Number.isFinite(prevTickReadRows) &&
+      Number.isFinite(tickT) &&
+      Number.isFinite(tickReadRows) &&
+      tickT > prevTickT + 1e-12;
+
+    const t0 = prevTickT;
+    const t1 = tickT;
+    const rr0 = prevTickReadRows;
+    const rr1 = tickReadRows;
+
+    const sorted = samplesPacked
+      .map(a => ({
+        t: asFiniteNumber(a?.[0]) != null ? asFiniteNumber(a?.[0]) / 1000.0 : null,
+        rb: asFiniteNumber(a?.[1]),
+        cpu: asFiniteNumber(a?.[2]) != null ? asFiniteNumber(a?.[2]) / 100.0 : null,
+        mem: a?.[3] === null || a?.[3] === undefined ? null : asFiniteNumber(a?.[3]),
+        thr: asFiniteNumber(a?.[4]),
+      }))
       .filter(x => x.t != null)
       .sort((a, b) => a.t - b.t);
 
-    for (const { s, t } of sorted) {
-      // dédup temporel (fenêtre glissante côté serveur)
-      if (t <= lastSampleT + EPS_T) continue;
+    if (!hasSamplesStream) {
+      hasSamplesStream = true;
+      lastSampleT = -Infinity;
 
-      const readBytes = asFiniteNumber(s.read_bytes);
-      const cpuInst = asFiniteNumber(s.cpu_percent_inst);
-      const memInst = asFiniteNumber(s.memory_bytes_inst);
-      const thrInst = asFiniteNumber(s.thread_count_inst);
+      lastEstimatedReadRows = null;
+      lastEstimatedReadRowsT = null;
 
-      if (readBytes != null) pushPointMonotone(series.readBytes, t, readBytes);
-      if (cpuInst != null) pushPointMonotone(series.cpu, t, cpuInst);
-      if (memInst != null) pushPointMonotone(series.memBytes, t, memInst);
-      if (thrInst != null) pushPointMonotone(series.threads, t, thrInst);
+      lastSampleReadBytes = null;
+      lastSampleReadBytesT = null;
+    }
 
-      lastSampleT = t;
-      latestElapsedSeconds = Math.max(latestElapsedSeconds, t);
+    for (const s of sorted) {
+      if (s.t <= lastSampleT + EPS_T) continue;
+
+      if (s.cpu != null) pushPointMonotone(series.cpu, s.t, s.cpu);
+      if (s.mem != null) pushPointMonotone(series.memBytes, s.t, s.mem);
+      if (s.thr != null) pushPointMonotone(series.threads, s.t, s.thr);
+
+      if (s.rb != null && lastSampleReadBytes != null && lastSampleReadBytesT != null) {
+        const dtB = s.t - lastSampleReadBytesT;
+        if (dtB > 1e-9) {
+          const bps = (s.rb - lastSampleReadBytes) / dtB;
+          if (Number.isFinite(bps) && bps >= 0) {
+            pushPointMonotone(series.readBytesPerSec, s.t, bps);
+          }
+        }
+      }
+      if (s.rb != null) {
+        lastSampleReadBytes = s.rb;
+        lastSampleReadBytesT = s.t;
+      }
+
+      let estReadRows = null;
+      if (canInterpolateRows) {
+        const alpha = Math.max(0, Math.min(1, (s.t - t0) / (t1 - t0)));
+        estReadRows = rr0 + alpha * (rr1 - rr0);
+      }
+
+      if (estReadRows != null && lastEstimatedReadRows != null && lastEstimatedReadRowsT != null) {
+        const dtR = s.t - lastEstimatedReadRowsT;
+        if (dtR > 1e-9) {
+          const rps = (estReadRows - lastEstimatedReadRows) / dtR;
+          if (Number.isFinite(rps) && rps >= 0) {
+            pushPointMonotone(series.readRowsPerSec, s.t, rps);
+          }
+        }
+      }
+
+      if (estReadRows != null) {
+        lastEstimatedReadRows = estReadRows;
+        lastEstimatedReadRowsT = s.t;
+      }
+
+      lastSampleT = s.t;
+      latestElapsedSeconds = Math.max(latestElapsedSeconds, s.t);
     }
 
     scheduleChartsRender();
   }
 
-  function updateProgress(payload) {
-    const t = asFiniteNumber(payload.elapsed_seconds);
-    if (t != null) latestElapsedSeconds = Math.max(latestElapsedSeconds, t);
 
-    setText(elapsedSecondsTextElement, formatSeconds(payload.elapsed_seconds));
+  function updateFromTick(rawTick) {
+    const t = normalizeTick(rawTick);
+    if (!t) return;
 
-    if (payload.percent_known) {
-      setText(progressPercentTextElement, `${formatNumber(payload.percent)} %`);
-      setProgressVisual(true, payload.percent);
-    } else {
-      setText(progressPercentTextElement, "indeterminate");
-      setProgressVisual(false, 0);
-    }
+    if (t.kind === "object") {
+      const tick = t.v;
 
-    setText(
-      readCountersTextElement,
-      `${formatCompactNumber(payload.read_rows)} rows · ${formatBytes(payload.read_bytes)}`
-    );
+      const tt = asFiniteNumber(tick.t);
+      if (tt != null) latestElapsedSeconds = Math.max(latestElapsedSeconds, tt);
 
-    // Fallback graph si pas de stream samples
-    if (!hasSamplesStream) {
-      const tt = t != null ? t : latestElapsedSeconds;
-      const rb = asFiniteNumber(payload.read_bytes);
-      if (rb != null) pushPointMonotone(series.readBytes, tt, rb);
-      scheduleChartsRender();
-    }
-  }
+      if (tick.p) {
+        updateProgressFromParts(
+          asFiniteNumber(tt ?? tick.p.elapsed_seconds) ?? 0,
+          asFiniteNumber(tick.p.percent) ?? 0,
+          !!tick.p.percent_known,
+          asFiniteNumber(tick.p.read_rows) ?? 0,
+          asFiniteNumber(tick.p.read_bytes) ?? 0,
+          asFiniteNumber(tick.p.total_rows_to_read) ?? 0
+        );
+      }
 
-  function updateResource(payload) {
-    const rowsPerSecondInst = asFiniteNumber(payload.rows_per_second_inst) ?? 0;
-    const bytesPerSecondInst = asFiniteNumber(payload.bytes_per_second_inst) ?? 0;
-    const cpuInst = asFiniteNumber(payload.cpu_percent_inst) ?? 0;
-    const cpuInstMax = asFiniteNumber(payload.cpu_percent_inst_max);
-    const memInst = asFiniteNumber(payload.memory_bytes_inst);
-    const memMax = asFiniteNumber(payload.memory_bytes_inst_max);
-    const tInst = asFiniteNumber(payload.thread_count_inst) ?? 0;
-    const tMax = asFiniteNumber(payload.thread_count_inst_max);
+      if (tick.r) {
+        updateResourceFromParts(
+          tick.r.rows_per_second_inst,
+          tick.r.bytes_per_second_inst,
+          tick.r.cpu_percent_inst,
+          tick.r.cpu_percent_inst_max,
+          tick.r.memory_bytes_inst,
+          tick.r.memory_bytes_inst_max,
+          tick.r.thread_count_inst,
+          tick.r.thread_count_inst_max
+        );
+      }
 
-    // évite le “flash” de fin à 0 : si on a déjà vu du non-zéro, on ignore un frame tout à 0
-    const zeroFrame =
-      rowsPerSecondInst === 0 &&
-      bytesPerSecondInst === 0 &&
-      cpuInst === 0 &&
-      tInst === 0 &&
-      (memInst === null || memInst === 0);
-
-    if (zeroFrame && hasNonZeroResourceFrame) {
+      if (Array.isArray(tick.s) && tick.s.length > 0) {
+        appendSamplesAndDeriveRates(tick.s, tt ?? 0, tick.p?.read_rows ?? null);
+      }
       return;
     }
-    if (!zeroFrame) hasNonZeroResourceFrame = true;
 
-    setText(
-      readRateTextElement,
-      `${formatCompactNumber(rowsPerSecondInst)} rows/s · ${formatBytes(bytesPerSecondInst)}/s`
+    const tickT = t.tSec;
+
+    updateProgressFromParts(
+      tickT,
+      t.percent ?? 0,
+      !!t.percentKnown,
+      t.readRows ?? 0,
+      t.readBytes ?? 0,
+      t.totalRows ?? 0
     );
 
-    setText(cpuTextElement, `${formatNumber(cpuInst)}%`);
-    setText(cpuMaxTextElement, `max: ${cpuInstMax == null ? "-" : formatNumber(cpuInstMax)}%`);
+    updateResourceFromParts(
+      t.rowsPerSec,
+      t.bytesPerSec,
+      t.cpuInst,
+      t.cpuMax,
+      t.memInst,
+      t.memMax,
+      t.thrInst,
+      t.thrMax
+    );
 
-    setText(memoryTextElement, memInst === null ? "-" : formatBytes(memInst));
-    setText(memoryMaxTextElement, `max: ${memMax === null ? "-" : formatBytes(memMax)}`);
-
-    setText(threadTextElement, `${formatNumber(tInst)}`);
-    setText(threadMaxTextElement, `max: ${tMax == null ? "-" : formatNumber(tMax)}`);
-
-    // Fallback graph si pas de stream samples
-    if (!hasSamplesStream) {
-      const t = asFiniteNumber(payload.elapsed_seconds);
-      const tt = (t != null) ? t : latestElapsedSeconds;
-
-      pushPointMonotone(series.cpu, tt, cpuInst);
-      if (memInst != null) pushPointMonotone(series.memBytes, tt, memInst);
-      pushPointMonotone(series.threads, tt, tInst);
-
-      scheduleChartsRender();
+    if (Array.isArray(t.samples) && t.samples.length > 0) {
+      appendSamplesAndDeriveRates(t.samples, tickT, t.readRows);
     }
+
+    prevTickT = tickT;
+    prevTickReadRows = t.readRows;
   }
 
   function startStream(streamUrl) {
     closeActiveStream();
 
-    hasSamplesStream = false;
-    lastSampleT = -Infinity;
-    hasNonZeroResourceFrame = false;
-    latestElapsedSeconds = 0;
+    clearMetrics();
+    clearResults();
 
     const eventSource = new EventSource(streamUrl);
     activeEventSource = eventSource;
@@ -689,37 +1044,10 @@
       setError("");
     });
 
-    eventSource.addEventListener("progress", (event) => {
+    eventSource.addEventListener("tick", (event) => {
       const payload = safelyParseJson(event.data);
-      if (!payload) return;
-      updateProgress(payload);
-    });
-
-    eventSource.addEventListener("resource", (event) => {
-      const payload = safelyParseJson(event.data);
-      if (!payload) return;
-      updateResource(payload);
-    });
-
-    // NEW: samples (mesures intermédiaires Go)
-    eventSource.addEventListener("samples", (event) => {
-      const payload = safelyParseJson(event.data);
-      if (!payload) return;
-
-      const samples = Array.isArray(payload.samples) ? payload.samples : [];
-      if (samples.length === 0) return;
-
-      // 1er lot samples → on bascule en mode samples et on repart propre (évite mélange progress+samples out-of-order)
-      if (!hasSamplesStream) {
-        hasSamplesStream = true;
-        series.readBytes.length = 0;
-        series.cpu.length = 0;
-        series.memBytes.length = 0;
-        series.threads.length = 0;
-        lastSampleT = -Infinity;
-      }
-
-      appendSamples(samples);
+      if (payload == null) return;
+      updateFromTick(payload);
     });
 
     eventSource.addEventListener("result_meta", (event) => {
@@ -733,11 +1061,13 @@
       const payload = safelyParseJson(event.data);
       if (!payload) return;
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
-      for (const row of rows) enqueueRowForRender(row);
+      for (const row of rows) {
+        allResultRows.push(row);
+        enqueueRowForRender(row);
+      }
+      updateCopyButtonState();
     });
 
-    // Attention: "error" en SSE peut être un event custom OU l'event réseau.
-    // Ici on supporte le custom (data JSON), sinon on affiche un message générique.
     eventSource.addEventListener("error", (event) => {
       const payload = event && event.data ? safelyParseJson(event.data) : null;
       if (payload && payload.message) {
@@ -749,29 +1079,36 @@
     eventSource.addEventListener("done", (event) => {
       const payload = safelyParseJson(event.data);
       if (payload) {
-        setStatus(String(payload.status || "done"));
-        setText(elapsedSecondsTextElement, formatSeconds(payload.elapsed_seconds));
+        lastDonePayload = payload;
+        let status = String(payload.status || "finished")
+        setStatus(status);
+        if (status == "finished") {
+          setText(progressPercentTextElement, `${formatNumber(100)} %`);
+          setProgressVisual(true, 100);
+        }
+        setText(elapsedSecondsTextElement, formatSeconds(asFiniteNumber(payload.elapsed_seconds) ?? latestElapsedSeconds));
         if (payload.message) setError(payload.message);
-
-        // si on finit sans % connu, on stoppe l'indeterminate
-        if (!payload.percent_known) setProgressVisual(true, 100);
+        if (payload.percent_known === false) setProgressVisual(true, 100);
       } else {
         setStatus("done");
       }
 
+      setText(readRowsRateTextElement, "-");
+      setText(readBytesRateTextElement, "-");
+      setText(cpuTextElement, "-");
+      setText(memoryTextElement, "-");
+      setText(threadTextElement, "-");
+      progressCardElement.classList.remove("is-indeterminate");
+
       if (cancelButtonElement) cancelButtonElement.disabled = true;
       closeActiveStream();
+      updateCopyButtonState();
     });
 
     eventSource.addEventListener("keepalive", () => {});
-    eventSource.onerror = () => {
-      // si tu veux afficher quelque chose en cas de coupure réseau, fais-le ici
-    };
+    eventSource.onerror = () => {};
   }
 
-  // ----------------------------
-  // UI actions
-  // ----------------------------
   async function handleRun() {
     const queryText = (queryTextAreaElement?.value || "").trim();
     if (!queryText) {
@@ -821,6 +1158,11 @@
   function handleClear() {
     closeActiveStream();
     activeQueryIdentifier = null;
+    lastDonePayload = null;
+    lastErrorMessage = "";
+    currentStatusValue = "idle";
+    allResultRows = [];
+    updateCopyButtonState();
 
     setQueryIdentifier("");
     setStatus("idle");
@@ -842,7 +1184,12 @@
   runButtonElement?.addEventListener("click", handleRun);
   cancelButtonElement?.addEventListener("click", handleCancel);
   clearButtonElement?.addEventListener("click", handleClear);
+  copyJsonButtonElement?.addEventListener("click", handleCopyJson);
+
 
   loadDefaultQueryIfEmpty();
   scheduleChartsRender();
+  updateCopyButtonState();
 })();
+
+

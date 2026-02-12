@@ -18,6 +18,7 @@
   color-scheme: dark;
 
   --bg: #0b0f14;
+  --error-bg: rgba(239, 68, 68, 0.12);
 
   --border: rgba(148, 163, 184, 0.14);
   --borderStrong: rgba(148, 163, 184, 0.22);
@@ -28,19 +29,29 @@
   --accent: #1d4ed8;
   --accentBorder: #2563eb;
 
-  --shadow1: 0 0.0625rem 0 rgba(255,255,255,0.04), 0 0.625rem 1.875rem rgba(0,0,0,0.35);
-  --shadow2: 0 0.0625rem 0 rgba(255,255,255,0.04), 0 0.875rem 2.5rem rgba(0,0,0,0.45);
+  --shadow1: 0 0.0625rem 0 rgba(255, 255, 255, 0.04),
+    0 0.625rem 1.875rem rgba(0, 0, 0, 0.35);
+  --shadow2: 0 0.0625rem 0 rgba(255, 255, 255, 0.04),
+    0 0.875rem 2.5rem rgba(0, 0, 0, 0.45);
   --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.25);
 
   --radius: 0.875rem;
   --radiusSm: 0.75rem;
   --radiusPill: 999rem;
 
-  --pageGlow1: radial-gradient(75rem 50rem at 20% -10%, rgba(29, 78, 216, 0.18), transparent 55%);
-  --pageGlow2: radial-gradient(56.25rem 43.75rem at 85% 0%, rgba(37, 99, 235, 0.10), transparent 55%);
+  --pageGlow1: radial-gradient(
+    75rem 50rem at 20% -10%,
+    rgba(29, 78, 216, 0.18),
+    transparent 55%
+  );
+  --pageGlow2: radial-gradient(
+    56.25rem 43.75rem at 85% 0%,
+    rgba(37, 99, 235, 0.1),
+    transparent 55%
+  );
 
   --panelBg: rgba(15, 22, 35, 0.92);
-  --panelTopSheen: rgba(255,255,255,0.04);
+  --panelTopSheen: rgba(255, 255, 255, 0.04);
 
   --pillBg: rgba(11, 15, 20, 0.55);
   --inputBg: rgba(11, 15, 20, 0.75);
@@ -55,14 +66,14 @@
   --buttonBg: rgba(17, 26, 42, 0.85);
   --buttonBgHover: rgba(17, 26, 42, 0.92);
   --buttonBorder: rgba(148, 163, 184, 0.18);
-  --buttonBorderHover: rgba(148, 163, 184, 0.30);
-  --buttonSheen: rgba(255,255,255,0.05);
-  --buttonSheenHover: rgba(255,255,255,0.07);
+  --buttonBorderHover: rgba(148, 163, 184, 0.3);
+  --buttonSheen: rgba(255, 255, 255, 0.05);
+  --buttonSheenHover: rgba(255, 255, 255, 0.07);
 
   --metricBg: rgba(11, 15, 20, 0.58);
 
   --rowHover: rgba(29, 78, 216, 0.08);
-  --rowDivider: rgba(148, 163, 184, 0.10);
+  --rowDivider: rgba(148, 163, 184, 0.1);
 }
 
 @media (prefers-color-scheme: light) {
@@ -70,6 +81,7 @@
     color-scheme: light;
 
     --bg: #f6f8fc;
+    --error-bg: rgb(255 68 68);
 
     --border: rgba(15, 23, 42, 0.14);
     --borderStrong: rgba(15, 23, 42, 0.22);
@@ -78,20 +90,30 @@
     --text: #102c7a;
     --accent: #c0d0ff;
 
-    --shadow1: 0 0.0625rem 0 rgba(255,255,255,0.55), 0 0.625rem 1.875rem rgba(2, 6, 23, 0.08);
-    --shadow2: 0 0.0625rem 0 rgba(255,255,255,0.55), 0 0.875rem 2.5rem rgba(2, 6, 23, 0.12);
-    --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.20);
+    --shadow1: 0 0.0625rem 0 rgba(255, 255, 255, 0.55),
+      0 0.625rem 1.875rem rgba(2, 6, 23, 0.08);
+    --shadow2: 0 0.0625rem 0 rgba(255, 255, 255, 0.55),
+      0 0.875rem 2.5rem rgba(2, 6, 23, 0.12);
+    --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.2);
 
-    --pageGlow1: radial-gradient(75rem 50rem at 20% -10%, rgba(29, 78, 216, 0.10), transparent 55%);
-    --pageGlow2: radial-gradient(56.25rem 43.75rem at 85% 0%, rgba(37, 99, 235, 0.06), transparent 55%);
+    --pageGlow1: radial-gradient(
+      75rem 50rem at 20% -10%,
+      rgba(29, 78, 216, 0.1),
+      transparent 55%
+    );
+    --pageGlow2: radial-gradient(
+      56.25rem 43.75rem at 85% 0%,
+      rgba(37, 99, 235, 0.06),
+      transparent 55%
+    );
 
     --panelBg: rgba(255, 255, 255, 0.92);
     --panelTopSheen: rgba(2, 6, 23, 0.03);
 
-    --pillBg: rgba(255, 255, 255, 0.70);
+    --pillBg: rgba(255, 255, 255, 0.7);
     --inputBg: rgba(255, 255, 255, 0.85);
     --tableBg: rgba(255, 255, 255, 0.82);
-    --theadBg: rgba(255, 255, 255, 0.90);
+    --theadBg: rgba(255, 255, 255, 0.9);
 
     --scrollTrack: rgba(2, 6, 23, 0.05);
     --scrollThumb: rgba(15, 23, 42, 0.16);
@@ -105,10 +127,10 @@
     --buttonSheen: rgba(2, 6, 23, 0.03);
     --buttonSheenHover: rgba(2, 6, 23, 0.04);
 
-    --metricBg: rgba(255, 255, 255, 0.70);
+    --metricBg: rgba(255, 255, 255, 0.7);
 
     --rowHover: rgba(29, 78, 216, 0.06);
-    --rowDivider: rgba(15, 23, 42, 0.10);
+    --rowDivider: rgba(15, 23, 42, 0.1);
   }
 }
 
@@ -116,6 +138,7 @@ html[data-theme="dark"] {
   color-scheme: dark;
 
   --bg: #0b0f14;
+  --error-bg: rgba(239, 68, 68, 0.12);
 
   --border: rgba(148, 163, 184, 0.14);
   --borderStrong: rgba(148, 163, 184, 0.22);
@@ -123,15 +146,25 @@ html[data-theme="dark"] {
   --muted: #9aa4b2;
   --text: #e6edf3;
 
-  --shadow1: 0 0.0625rem 0 rgba(255,255,255,0.04), 0 0.625rem 1.875rem rgba(0,0,0,0.35);
-  --shadow2: 0 0.0625rem 0 rgba(255,255,255,0.04), 0 0.875rem 2.5rem rgba(0,0,0,0.45);
+  --shadow1: 0 0.0625rem 0 rgba(255, 255, 255, 0.04),
+    0 0.625rem 1.875rem rgba(0, 0, 0, 0.35);
+  --shadow2: 0 0.0625rem 0 rgba(255, 255, 255, 0.04),
+    0 0.875rem 2.5rem rgba(0, 0, 0, 0.45);
   --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.25);
 
-  --pageGlow1: radial-gradient(75rem 50rem at 20% -10%, rgba(29, 78, 216, 0.18), transparent 55%);
-  --pageGlow2: radial-gradient(56.25rem 43.75rem at 85% 0%, rgba(37, 99, 235, 0.10), transparent 55%);
+  --pageGlow1: radial-gradient(
+    75rem 50rem at 20% -10%,
+    rgba(29, 78, 216, 0.18),
+    transparent 55%
+  );
+  --pageGlow2: radial-gradient(
+    56.25rem 43.75rem at 85% 0%,
+    rgba(37, 99, 235, 0.1),
+    transparent 55%
+  );
 
   --panelBg: rgba(15, 22, 35, 0.92);
-  --panelTopSheen: rgba(255,255,255,0.04);
+  --panelTopSheen: rgba(255, 255, 255, 0.04);
 
   --pillBg: rgba(11, 15, 20, 0.55);
   --inputBg: rgba(11, 15, 20, 0.75);
@@ -146,20 +179,21 @@ html[data-theme="dark"] {
   --buttonBg: rgba(17, 26, 42, 0.85);
   --buttonBgHover: rgba(17, 26, 42, 0.92);
   --buttonBorder: rgba(148, 163, 184, 0.18);
-  --buttonBorderHover: rgba(148, 163, 184, 0.30);
-  --buttonSheen: rgba(255,255,255,0.05);
-  --buttonSheenHover: rgba(255,255,255,0.07);
+  --buttonBorderHover: rgba(148, 163, 184, 0.3);
+  --buttonSheen: rgba(255, 255, 255, 0.05);
+  --buttonSheenHover: rgba(255, 255, 255, 0.07);
 
   --metricBg: rgba(11, 15, 20, 0.58);
 
   --rowHover: rgba(29, 78, 216, 0.08);
-  --rowDivider: rgba(148, 163, 184, 0.10);
+  --rowDivider: rgba(148, 163, 184, 0.1);
 }
 
 html[data-theme="light"] {
   color-scheme: light;
 
   --bg: #f6f8fc;
+  --error-bg: rgb(255 68 68);
 
   --border: rgba(15, 23, 42, 0.14);
   --borderStrong: rgba(15, 23, 42, 0.22);
@@ -168,20 +202,30 @@ html[data-theme="light"] {
   --text: #102c7a;
   --accent: #c0d0ff;
 
-  --shadow1: 0 0.0625rem 0 rgba(255,255,255,0.55), 0 0.625rem 1.875rem rgba(2, 6, 23, 0.08);
-  --shadow2: 0 0.0625rem 0 rgba(255,255,255,0.55), 0 0.875rem 2.5rem rgba(2, 6, 23, 0.12);
-  --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.20);
+  --shadow1: 0 0.0625rem 0 rgba(255, 255, 255, 0.55),
+    0 0.625rem 1.875rem rgba(2, 6, 23, 0.08);
+  --shadow2: 0 0.0625rem 0 rgba(255, 255, 255, 0.55),
+    0 0.875rem 2.5rem rgba(2, 6, 23, 0.12);
+  --ring: 0 0 0 0.1875rem rgba(37, 99, 235, 0.2);
 
-  --pageGlow1: radial-gradient(75rem 50rem at 20% -10%, rgba(29, 78, 216, 0.10), transparent 55%);
-  --pageGlow2: radial-gradient(56.25rem 43.75rem at 85% 0%, rgba(37, 99, 235, 0.06), transparent 55%);
+  --pageGlow1: radial-gradient(
+    75rem 50rem at 20% -10%,
+    rgba(29, 78, 216, 0.1),
+    transparent 55%
+  );
+  --pageGlow2: radial-gradient(
+    56.25rem 43.75rem at 85% 0%,
+    rgba(37, 99, 235, 0.06),
+    transparent 55%
+  );
 
   --panelBg: rgba(255, 255, 255, 0.92);
   --panelTopSheen: rgba(2, 6, 23, 0.03);
 
-  --pillBg: rgba(255, 255, 255, 0.70);
+  --pillBg: rgba(255, 255, 255, 0.7);
   --inputBg: rgba(255, 255, 255, 0.85);
   --tableBg: rgba(255, 255, 255, 0.82);
-  --theadBg: rgba(255, 255, 255, 0.90);
+  --theadBg: rgba(255, 255, 255, 0.9);
 
   --scrollTrack: rgba(2, 6, 23, 0.05);
   --scrollThumb: rgba(15, 23, 42, 0.16);
@@ -195,10 +239,10 @@ html[data-theme="light"] {
   --buttonSheen: rgba(2, 6, 23, 0.03);
   --buttonSheenHover: rgba(2, 6, 23, 0.04);
 
-  --metricBg: rgba(255, 255, 255, 0.70);
+  --metricBg: rgba(255, 255, 255, 0.7);
 
   --rowHover: rgba(29, 78, 216, 0.06);
-  --rowDivider: rgba(15, 23, 42, 0.10);
+  --rowDivider: rgba(15, 23, 42, 0.1);
 }
 
 html {
@@ -209,12 +253,14 @@ html {
   text-rendering: optimizeLegibility;
 }
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   background: var(--pageGlow1), var(--pageGlow2), var(--bg);
   color: var(--text);
-  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial;
   overflow-x: hidden;
   min-height: 100%;
 }
@@ -253,17 +299,11 @@ html, body {
   align-items: start;
 }
 
-@media (max-width: 61.25rem) {
-  .layout {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto auto;
-  }
-}
-
 .panel {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(180deg, var(--panelTopSheen), transparent 18%), var(--panelBg);
+  background: linear-gradient(180deg, var(--panelTopSheen), transparent 18%),
+    var(--panelBg);
   box-shadow: var(--shadow1);
   padding: 0.75rem;
   min-width: 0;
@@ -281,7 +321,7 @@ html, body {
   border: 1px solid var(--border);
   border-radius: var(--radiusPill);
   background: var(--pillBg);
-  box-shadow: 0 0.0625rem 0 rgba(255,255,255,0.03);
+  box-shadow: 0 0.0625rem 0 rgba(255, 255, 255, 0.03);
 }
 
 .statusPill__label {
@@ -297,7 +337,8 @@ html, body {
 }
 
 .statusPill__value--mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
 }
 
 #queryTextArea {
@@ -308,9 +349,11 @@ html, body {
   padding: 0.75rem;
   border-radius: var(--radiusSm);
   border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 18%), var(--inputBg);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
+    var(--inputBg);
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
   font-size: 0.8125rem;
   line-height: 1.5;
   outline: none;
@@ -340,14 +383,14 @@ html, body {
 .queryActions {
   display: flex;
   gap: 0.625rem;
-  float: none;
 }
 
 .button {
   padding: 0.5625rem 0.75rem;
   border-radius: 0.6875rem;
   border: 1px solid var(--buttonBorder);
-  background: linear-gradient(180deg, var(--buttonSheen), transparent 35%), var(--buttonBg);
+  background: linear-gradient(180deg, var(--buttonSheen), transparent 35%),
+    var(--buttonBg);
   color: var(--text);
   cursor: pointer;
   font-weight: 800;
@@ -356,18 +399,14 @@ html, body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
-  box-shadow: 0 0.0625rem 0 rgba(255,255,255,0.03);
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease,
+    box-shadow 120ms ease;
+  box-shadow: 0 0.0625rem 0 rgba(255, 255, 255, 0.03);
   user-select: none;
 }
 
 .button:hover {
   border-color: var(--buttonBorderHover);
-  background: linear-gradient(180deg, var(--buttonSheenHover), transparent 35%), var(--buttonBgHover);
-}
-
-.button:active {
-  transform: translateY(0.0625rem);
 }
 
 .button:disabled {
@@ -378,7 +417,13 @@ html, body {
 
 .button--primary {
   border-color: rgba(37, 99, 235, 0.55);
-  background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 45%, transparent 80%), var(--accent);
+  background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.1),
+      rgba(255, 255, 255, 0.02) 45%,
+      transparent 80%
+    ),
+    var(--accent);
   box-shadow: 0 0.625rem 1.5rem rgba(29, 78, 216, 0.22);
 }
 
@@ -392,28 +437,31 @@ select.button {
   -webkit-appearance: none;
   -moz-appearance: none;
   padding-right: 2.25rem;
-  background-image:
-    linear-gradient(45deg, transparent 50%, currentColor 50%),
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
     linear-gradient(135deg, currentColor 50%, transparent 50%),
     linear-gradient(180deg, var(--buttonSheen), transparent 35%);
-  background-position:
-    right 0.95rem center,
-    right 0.70rem center,
-    0 0;
-  background-size:
-    0.45rem 0.45rem,
-    0.45rem 0.45rem,
-    100% 100%;
+  background-position: right 0.95rem center, right 0.7rem center, 0 0;
+  background-size: 0.45rem 0.45rem, 0.45rem 0.45rem, 100% 100%;
   background-repeat: no-repeat;
 }
 
 .metricColumn {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.625rem;
 }
 
-/* ---- Metric cards (texte au-dessus, chart en fond) ---- */
+.metricColumn > .metricCompact {
+  grid-column: span 2;
+  width: 100%;
+  display: block;
+}
+
+.metricColumn > .metricCompact:nth-child(1),
+.metricColumn > .metricCompact:nth-child(2) {
+  grid-column: span 1;
+}
+
 .metricCompact {
   position: relative;
   overflow: hidden;
@@ -421,48 +469,54 @@ select.button {
   border: 1px solid var(--border);
   border-radius: var(--radiusSm);
   padding: 0.625rem;
-  background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 30%), var(--metricBg);
-  box-shadow: 0 0.0625rem 0 rgba(255,255,255,0.03);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 30%),
+    var(--metricBg);
+  box-shadow: 0 0.0625rem 0 rgba(255, 255, 255, 0.03);
 }
 
-.metricCompact__content {
-  position: relative;
-  z-index: 2;
-}
-
-.metricCompact__bgChart {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.22;
-  filter: blur(0.2px);
-}
-
-/* voile subtil pour lisibilité du texte */
 .metricCompact::after {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 1;
-  background: linear-gradient(180deg,
-    rgba(0,0,0,0.22) 0%,
-    rgba(0,0,0,0.10) 38%,
-    rgba(0,0,0,0.00) 100%
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.22) 0%,
+    rgba(0, 0, 0, 0.1) 38%,
+    rgba(0, 0, 0, 0) 100%
   );
   pointer-events: none;
   opacity: 0.35;
 }
 
 html[data-theme="light"] .metricCompact::after {
-  background: linear-gradient(180deg,
-    rgba(255,255,255,0.55) 0%,
-    rgba(255,255,255,0.20) 42%,
-    rgba(255,255,255,0.00) 100%
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.2) 42%,
+    rgba(255, 255, 255, 0) 100%
   );
   opacity: 0.55;
+}
+
+.metricCompact__content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.metricCompact__bgChart {
+  position: absolute;
+  inset: 0;
+  margin-left: -0.5rem;
+  width: calc(100% + 1rem);
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.22;
+  filter: blur(0.2px);
 }
 
 .metricCompact__label {
@@ -476,6 +530,12 @@ html[data-theme="light"] .metricCompact::after {
 .metricCompact__value {
   font-size: 0.875rem;
   font-weight: 900;
+
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+
+  min-width: 6ch;
+  text-align: right;
 }
 
 .metricCompact__sub {
@@ -483,10 +543,12 @@ html[data-theme="light"] .metricCompact::after {
   font-size: 0.6875rem;
   color: var(--muted);
   font-weight: 800;
+  text-align: right;
 }
 
-/* ---- Progress "en fond" via CSS var --p (0..1) ---- */
-.metricCompact--progress { --p: 0; }
+.metricCompact--progress {
+  --p: 0;
+}
 
 .metricCompact--progress::before {
   content: "";
@@ -498,23 +560,27 @@ html[data-theme="light"] .metricCompact::after {
     90deg,
     rgba(37, 99, 235, 0.22) 0%,
     rgba(37, 99, 235, 0.22) calc(var(--p) * 100%),
-    rgba(37, 99, 235, 0.00) calc(var(--p) * 100%)
+    rgba(37, 99, 235, 0) calc(var(--p) * 100%)
   );
 }
 
 .metricCompact--progress.is-indeterminate::before {
   background: linear-gradient(
     90deg,
-    rgba(37, 99, 235, 0.00) 0%,
+    rgba(37, 99, 235, 0) 0%,
     rgba(37, 99, 235, 0.22) 40%,
-    rgba(37, 99, 235, 0.00) 80%
+    rgba(37, 99, 235, 0) 80%
   );
   animation: indet 1100ms ease-in-out infinite;
 }
 
 @keyframes indet {
-  0%   { transform: translateX(-120%); }
-  100% { transform: translateX(120%); }
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(120%);
+  }
 }
 
 .panel--query {
@@ -525,7 +591,7 @@ html[data-theme="light"] .metricCompact::after {
 
 .panel--results {
   grid-column: 1 / -1;
-  padding-bottom: 0;
+  padding-bottom: 1rem;
 }
 
 .panel__meta {
@@ -540,13 +606,18 @@ html[data-theme="light"] .metricCompact::after {
   font-weight: 800;
 }
 
+.panel__title, .panel__meta{
+  display: inline;
+}
+
 .tableWrap {
+  margin-top: 10px;
   border-radius: var(--radiusSm);
-  border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 18%), var(--tableBg);
+  
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
+    var(--tableBg);
   overflow: visible;
-  max-height: none;
-  box-shadow: 0 0.0625rem 0 rgba(255,255,255,0.03);
+  box-shadow: 0 0.0625rem 0 rgba(255, 255, 255, 0.03);
 }
 
 .resultTable {
@@ -586,9 +657,64 @@ html[data-theme="light"] .metricCompact::after {
   padding: 0.625rem 0.75rem;
   border-radius: var(--radiusSm);
   border: 1px solid rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca;
+  background: var(--error-bg);
+  color: #ffffff;
   font-weight: 900;
   font-size: 0.75rem;
   white-space: pre-wrap;
+  line-height: 1.3rem;
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.button--small {
+  height: 1.75rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: 0.625rem;
+  font-size: 0.6875rem;
+}
+
+.copyToast {
+  font-size: 0.6875rem;
+  font-weight: 900;
+  color: var(--muted);
+  user-select: none;
+}
+
+
+@media (max-width: 70rem) {
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+
+  #queryTextArea {
+    min-height: 30rem;
+  }
+
+  .metricColumn {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .metricColumn > .metricCompact {
+    grid-column: span 2;
+  }
+
+  .metricColumn > .metricCompact:nth-child(1),
+  .metricColumn > .metricCompact:nth-child(2) {
+    grid-column: span 1;
+  }
+
+  .panel--query {
+    height: 100%;
+  }
+}
+
+#themeSelect:focus-visible {
+  outline: transparent;
 }
