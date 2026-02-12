@@ -1181,6 +1181,203 @@
       "SELECT number % 10 AS index, count() FROM numbers(10000000000) GROUP BY index";
   }
 
+    // --- IDE-like TAB behavior in textarea (undo-friendly + tab-stops) ---
+  const TAB_SIZE = 4;
+
+  function getLineStartIndex(text, index) {
+    const i = text.lastIndexOf("\n", index - 1);
+    return i === -1 ? 0 : i + 1;
+  }
+
+  function getLineEndIndex(text, index) {
+    const i = text.indexOf("\n", index);
+    return i === -1 ? text.length : i;
+  }
+
+  function leadingWsLen(line) {
+    let i = 0;
+    while (i < line.length) {
+      const c = line[i];
+      if (c !== " " && c !== "\t") break;
+      i++;
+    }
+    return i;
+  }
+
+  // visual columns for a whitespace prefix (tabs expand to tab stops)
+  function wsToCols(ws) {
+    let col = 0;
+    for (const ch of ws) {
+      if (ch === "\t") col += TAB_SIZE - (col % TAB_SIZE);
+      else if (ch === " ") col += 1;
+    }
+    return col;
+  }
+
+  // visual columns in the line up to a given offset (handles tabs)
+  function lineColsUpTo(line, offset) {
+    let col = 0;
+    for (let i = 0; i < Math.min(offset, line.length); i++) {
+      const ch = line[i];
+      if (ch === "\t") col += TAB_SIZE - (col % TAB_SIZE);
+      else col += 1; // ok for normal ASCII; good enough for SQL
+    }
+    return col;
+  }
+
+  function nextTabStopCols(col) {
+    const rem = col % TAB_SIZE;
+    return col + (rem === 0 ? TAB_SIZE : (TAB_SIZE - rem));
+  }
+
+  function prevTabStopCols(col) {
+    if (col <= 0) return 0;
+    const rem = col % TAB_SIZE;
+    return Math.max(0, col - (rem === 0 ? TAB_SIZE : rem));
+  }
+
+  // map selection positions so it feels IDE-ish after indent/outdent
+  function mapRelPos(relPos, oldLines, oldPrefixLens, oldPrefixCols, newPrefixCols) {
+    let oldCursor = 0;
+    let newCursor = 0;
+
+    for (let i = 0; i < oldLines.length; i++) {
+      const oldLine = oldLines[i];
+      const oldLineLen = oldLine.length;
+
+      const opLen = oldPrefixLens[i];
+      const opCols = oldPrefixCols[i];
+      const npCols = newPrefixCols[i];
+
+      const oldContentLen = oldLineLen - opLen;
+      const newLineLen = npCols + oldContentLen; // we normalize indent to spaces
+
+      const oldLineStart = oldCursor;
+      const newLineStart = newCursor;
+      const oldLineEnd = oldLineStart + oldLineLen;
+
+      if (relPos <= oldLineEnd) {
+        const within = relPos - oldLineStart;
+
+        if (within <= opLen) {
+          // if cursor was inside old indent, keep it inside new indent (clamped)
+          // approximate mapping: proportion of cols in old indent -> cols in new indent
+          const withinCols = wsToCols(oldLine.slice(0, within));
+          const clamped = Math.min(npCols, withinCols); // don't go past new indent
+          return newLineStart + clamped;
+        } else {
+          // cursor is in content => keep same content offset
+          const withinContent = within - opLen;
+          return newLineStart + npCols + withinContent;
+        }
+      }
+
+      oldCursor += oldLineLen;
+      newCursor += newLineLen;
+
+      if (i < oldLines.length - 1) {
+        // newline char
+        if (relPos === oldCursor) return newCursor;
+        oldCursor += 1;
+        newCursor += 1;
+      }
+    }
+
+    return newCursor;
+  }
+
+  queryTextAreaElement?.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+
+    const ta = e.currentTarget;
+    const value = ta.value;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+
+    e.preventDefault(); // stop focus change
+    ta.focus();
+
+    // --- No selection: behave like IDE tab at caret (next tab stop) ---
+    if (start === end && !e.shiftKey) {
+      const lineStart = getLineStartIndex(value, start);
+      const lineEnd = getLineEndIndex(value, start);
+      const line = value.slice(lineStart, lineEnd);
+      const offsetInLine = start - lineStart;
+
+      const col = lineColsUpTo(line, offsetInLine);
+      const target = nextTabStopCols(col);
+      const add = target - col;
+
+      const spaces = " ".repeat(add);
+      ta.setRangeText(spaces, start, end, "end"); // undo-friendly
+      return;
+    }
+
+    // --- No selection + Shift+Tab: outdent current line (if in leading whitespace) ---
+    if (start === end && e.shiftKey) {
+      const lineStart = getLineStartIndex(value, start);
+      const lineEnd = getLineEndIndex(value, start);
+      const line = value.slice(lineStart, lineEnd);
+
+      const wsLen = leadingWsLen(line);
+      const caretOffset = start - lineStart;
+
+      // Only outdent if caret is inside indentation; otherwise do nothing
+      if (caretOffset > wsLen) return;
+
+      const oldWs = line.slice(0, wsLen);
+      const oldCols = wsToCols(oldWs);
+      const newCols = prevTabStopCols(oldCols);
+
+      const content = line.slice(wsLen);
+      const newLine = " ".repeat(newCols) + content;
+
+      ta.setRangeText(newLine, lineStart, lineEnd, "preserve");
+
+      // place caret in same visual column (clamped)
+      const newCaret = lineStart + Math.min(newCols, newCols); // inside indent
+      ta.selectionStart = ta.selectionEnd = newCaret;
+      return;
+    }
+
+    // --- Selection: indent/outdent touched lines to tab stops ---
+    let endAdj = end;
+    if (endAdj > start && value[endAdj - 1] === "\n") endAdj -= 1;
+
+    const blockStart = getLineStartIndex(value, start);
+    const blockEnd = getLineEndIndex(value, endAdj);
+
+    const block = value.slice(blockStart, blockEnd);
+    const oldLines = block.split("\n");
+
+    const oldPrefixLens = oldLines.map(leadingWsLen);
+    const oldPrefixCols = oldLines.map((ln, i) => wsToCols(ln.slice(0, oldPrefixLens[i])));
+
+    const newPrefixCols = oldPrefixCols.map((cols) => {
+      return e.shiftKey ? prevTabStopCols(cols) : nextTabStopCols(cols);
+    });
+
+    const newLines = oldLines.map((ln, i) => {
+      const content = ln.slice(oldPrefixLens[i]);
+      return " ".repeat(newPrefixCols[i]) + content;
+    });
+
+    const newBlock = newLines.join("\n");
+
+    // Map selection endpoints for a nice feel
+    const relStart = start - blockStart;
+    const relEnd = end - blockStart;
+
+    const newRelStart = mapRelPos(relStart, oldLines, oldPrefixLens, oldPrefixCols, newPrefixCols);
+    const newRelEnd = mapRelPos(relEnd, oldLines, oldPrefixLens, oldPrefixCols, newPrefixCols);
+
+    ta.setRangeText(newBlock, blockStart, blockEnd, "preserve"); // undo-friendly
+
+    ta.selectionStart = blockStart + newRelStart;
+    ta.selectionEnd = blockStart + newRelEnd;
+  });
+
+
   runButtonElement?.addEventListener("click", handleRun);
   cancelButtonElement?.addEventListener("click", handleCancel);
   clearButtonElement?.addEventListener("click", handleClear);

@@ -19,4 +19,10 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /out/clickhouse-dash /clickhouse-dash
 EXPOSE 8080
 ENV PORT=8080
+HEALTHCHECK --interval=5s\
+            --timeout=1s \
+            --start-interval=500ms \
+            --start-period=5s \
+            --retries=1 \
+            CMD ["/clickhouse-dash", "--health"]
 ENTRYPOINT ["/clickhouse-dash"]

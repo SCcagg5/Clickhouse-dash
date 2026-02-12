@@ -85,9 +85,8 @@ func (server *dashboardServer) serve() error {
 	multiplexer.Handle("/api/query/cancel", http.HandlerFunc(server.handleCancelQuery))
 
 	// Health check.
-	multiplexer.Handle("/healthz", http.HandlerFunc(func(httpResponseWriter http.ResponseWriter, httpRequest *http.Request) {
-		writeJson(httpResponseWriter, http.StatusOK, map[string]any{"status": "ok"})
-	}))
+	multiplexer.Handle("/healthz", http.HandlerFunc(server.handleHealthz))
+
 
 	httpServer := &http.Server{
 		Addr:              server.configuration.serverListenAddress,
@@ -108,6 +107,58 @@ type createQueryRequest struct {
 	DatabaseName string         `json:"database,omitempty"`
 	Settings     map[string]any `json:"settings,omitempty"`
 }
+
+func (server *dashboardServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErrorJson(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed.")
+		return
+	}
+
+	// Database name fallback
+	databaseName := strings.TrimSpace(server.configuration.clickhouseDatabaseName)
+	if databaseName == "" {
+		databaseName = "default"
+	}
+
+	// Short timeout so healthz never hangs
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	conn, err := server.clickhouseConnectionManager.connectionForDatabase(databaseName)
+	if err != nil {
+		writeJson(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "not_ready",
+			"clickhouse": map[string]any{
+				"ok":    false,
+				"error": err.Error(),
+			},
+		})
+		return
+	}
+
+	if err := conn.Ping(ctx); err != nil {
+		// Best-effort: force a reconnect next time
+		server.clickhouseConnectionManager.invalidateDatabaseConnection(databaseName)
+
+		writeJson(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "not_ready",
+			"clickhouse": map[string]any{
+				"ok":    false,
+				"error": err.Error(),
+			},
+		})
+		return
+	}
+
+	writeJson(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"clickhouse": map[string]any{
+			"ok":       true,
+			"database": databaseName,
+		},
+	})
+}
+
 
 // handleCreateQuery handles POST /api/query.
 func (server *dashboardServer) handleCreateQuery(httpResponseWriter http.ResponseWriter, httpRequest *http.Request) {
@@ -323,7 +374,6 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		threadPeakMax   int
 		peakMemMaxBytes *int64
 
-		// For 10ms graph points packed inside each 250ms tick.
 		prevTickElapsedMs int64
 		prevSampleRB      int64
 		prevSampleCPU     int64
@@ -366,7 +416,6 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		}
 		elapsedMs := int64(elapsedSeconds * 1000.0)
 
-		// progress
 		percent, known := calculateProgressPercent(0, snap.readBytesTotal, snap.totalRowsToRead, snap.readRowsTotal)
 		percentCenti := int64(-1)
 		knownInt := int64(0)
@@ -426,16 +475,12 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 		thrInst := int64(threadCountCurrent)
 		thrMax := int64(threadPeakMax)
 
-		// ---- packed samples every 10ms INSIDE the 250ms tick ----
-		// We don't get real 10ms callbacks from CH; we generate intermediate points by interpolation
-		// between the previous tick and this tick.
 		samples := make([][]int64, 0, 32)
 		if prevTickElapsedMs > 0 && elapsedMs > prevTickElapsedMs {
 			step := int64(10)
 			dtMs := elapsedMs - prevTickElapsedMs
 			count := int(dtMs / step)
 			if count > 0 {
-				// cap to avoid huge bursts if the client pauses
 				if count > 5000 {
 					count = 5000
 					step = dtMs / int64(count)
@@ -444,7 +489,6 @@ func (server *dashboardServer) handleQueryStream(httpResponseWriter http.Respons
 					}
 				}
 
-				// current sample values (end of interval)
 				curRB := int64(snap.readBytesTotal)
 				curCPU := cpuCenti
 				curMem := memInst

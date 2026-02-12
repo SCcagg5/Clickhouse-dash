@@ -126,31 +126,44 @@ func (manager *clickhouseConnectionManager) closeAll() {
 	}
 }
 
+func (manager *clickhouseConnectionManager) invalidateDatabaseConnection(databaseName string) {
+	manager.mutex.Lock()
+	defer manager.mutex.Unlock()
+
+	if existing, ok := manager.connectionsByDatabase[databaseName]; ok {
+		_ = existing.Close()
+		delete(manager.connectionsByDatabase, databaseName)
+	}
+}
+
 // openConnection opens a ClickHouse connection with the provided database and credentials.
 func (manager *clickhouseConnectionManager) openConnection(databaseName string, userName string, password string) (clickhouseDriver.Conn, error) {
 	if strings.TrimSpace(manager.addressOrDsn) == "" {
 		return nil, errors.New("CH_URL is empty")
 	}
 
-	// If the value looks like a DSN, let clickhouse.ParseDSN handle it.
 	if strings.Contains(manager.addressOrDsn, "://") {
 		parsedOptions, parseError := clickhouse.ParseDSN(manager.addressOrDsn)
 		if parseError != nil {
-			return nil, fmt.Errorf("failed to parse CH_URL as DSN: %w", parseError)
+			return nil, fmt.Errorf("failed to parse ClickHouse DSN: %w", parseError)
 		}
 
 		parsedOptions.Auth.Database = databaseName
-		parsedOptions.Auth.Username = userName
-		parsedOptions.Auth.Password = password
 
-		parsedOptions.DialContext = manager.dialContext()
-		parsedOptions.Protocol = clickhouse.Native
-
-		connection, openError := clickhouse.Open(parsedOptions)
+		conn, openError := clickhouse.Open(parsedOptions)
 		if openError != nil {
 			return nil, fmt.Errorf("failed to open ClickHouse connection (dsn): %w", openError)
 		}
-		return connection, nil
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		if pingError := conn.Ping(ctx); pingError != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("clickhouse ping failed: %w", pingError)
+		}
+
+		return conn, nil
 	}
 
 	addresses := parseCommaSeparatedAddresses(manager.addressOrDsn)
